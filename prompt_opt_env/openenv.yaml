@@ -1,7 +1,45 @@
-spec_version: 1
-name: prompt_opt_env
-type: space
-runtime: fastapi
-app: server.app:app
+name: prompt-opt-env
+version: 0.1.0
+description: >
+  PromptOptEnv is a Reinforcement Learning environment built on Meta's OpenEnv framework.
+  The agent observes a task description and a current prompt string, then takes one of five
+  deterministic editing actions (add context, shorten, add example, rephrase, add constraint)
+  to improve the prompt. After each action, the environment scores the improved prompt's output
+  using ROUGE-L against a reference answer and returns the score delta as the reward signal.
+  Episodes run for a maximum of 5 steps or terminate early on success (score > 0.85).
+  This environment is designed to train agents to perform automatic prompt engineering,
+  directly relevant to LLM post-training and RLHF research.
+author: Shyam
+license: BSD-3-Clause
+python: ">=3.11"
+entry_point: server.app:app
 port: 8000
-
+env_vars:
+  - name: MAX_STEPS
+    default: "5"
+    description: Maximum steps per episode
+  - name: DONE_THRESHOLD
+    default: "0.85"
+    description: ROUGE-L score above which episode terminates with success bonus
+  - name: GRADER
+    default: "rouge"
+    description: "rouge (deterministic, no API) or hf_api (calls real LLM via HF Inference API)"
+  - name: HF_TOKEN
+    required: false
+    secret: true
+    description: HuggingFace token for Inference API grader (required only for hf_api grader)
+  - name: HF_MODEL
+    default: "mistralai/Mistral-7B-Instruct-v0.2"
+    description: Model to use for HF Inference API calls
+  - name: TASK_SEED
+    required: false
+    description: Fix task selection for reproducibility (integer 0-14)
+  - name: ENABLE_WEB_INTERFACE
+    default: "false"
+    description: Enable Gradio debug UI at /web (disable in production)
+tags:
+  - nlp
+  - prompt-engineering
+  - rl
+  - text
+  - llm
