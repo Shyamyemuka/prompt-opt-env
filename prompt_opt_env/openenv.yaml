@@ -1,45 +1,60 @@
-name: prompt-opt-env
+name: prompt-rl
 version: 0.1.0
 description: >
-  PromptOptEnv is a Reinforcement Learning environment built on Meta's OpenEnv framework.
-  The agent observes a task description and a current prompt string, then takes one of five
-  deterministic editing actions (add context, shorten, add example, rephrase, add constraint)
-  to improve the prompt. After each action, the environment scores the improved prompt's output
-  using ROUGE-L against a reference answer and returns the score delta as the reward signal.
-  Episodes run for a maximum of 5 steps or terminate early on success (score > 0.85).
-  This environment is designed to train agents to perform automatic prompt engineering,
-  directly relevant to LLM post-training and RLHF research.
+  PromptRL is a cost-aware Reinforcement Learning environment for task-adaptive
+  prompt optimisation. Unlike existing tools (DSPy, TextGrad, OPRO) that maximise
+  quality with unlimited token budgets, PromptRL trains agents to maximise
+  output quality per token spent. The reward is shaped by two competing objectives:
+  ROUGE-L quality improvement minus a token cost penalty. Each task has a hard token
+  budget; exceeding it terminates the episode with a penalty. A STOP action lets the
+  agent voluntarily end the episode when quality is good enough for the tokens spent.
+  This models real production constraints — every token costs money at inference scale.
+  Includes 15 tasks (summarisation, QA, instruction-following, code explanation) with
+  explicit easy/medium/hard difficulty and decreasing token budgets.
 author: Shyam
 license: BSD-3-Clause
 python: ">=3.11"
 entry_point: server.app:app
 port: 8000
 env_vars:
-  - name: MAX_STEPS
-    default: "5"
-    description: Maximum steps per episode
-  - name: DONE_THRESHOLD
-    default: "0.85"
-    description: ROUGE-L score above which episode terminates with success bonus
-  - name: GRADER
-    default: "rouge"
-    description: "rouge (deterministic, no API) or hf_api (calls real LLM via HF Inference API)"
+  - name: API_BASE_URL
+    required: true
+    secret: false
+    description: OpenAI-compatible API endpoint (e.g. https://api-inference.huggingface.co/v1/)
+  - name: MODEL_NAME
+    required: true
+    secret: false
+    description: Model identifier (e.g. mistralai/Mistral-7B-Instruct-v0.2)
   - name: HF_TOKEN
-    required: false
+    required: true
     secret: true
-    description: HuggingFace token for Inference API grader (required only for hf_api grader)
-  - name: HF_MODEL
-    default: "mistralai/Mistral-7B-Instruct-v0.2"
-    description: Model to use for HF Inference API calls
+    description: HuggingFace API token
+  - name: MAX_STEPS
+    required: false
+    default: "7"
+    description: Maximum steps per episode (includes STOP action)
+  - name: DONE_THRESHOLD
+    required: false
+    default: "0.85"
+    description: ROUGE-L above which episode ends with success bonus
+  - name: TOKEN_PENALTY_ALPHA
+    required: false
+    default: "0.02"
+    description: Cost penalty coefficient alpha in reward = quality_delta - alpha * token_overhead
+  - name: GRADER
+    required: false
+    default: "rouge"
+    description: "rouge (no API, deterministic) or openai_client (real LLM)"
   - name: TASK_SEED
     required: false
-    description: Fix task selection for reproducibility (integer 0-14)
-  - name: ENABLE_WEB_INTERFACE
-    default: "false"
-    description: Enable Gradio debug UI at /web (disable in production)
+    default: ""
+    description: Integer 0-14. Fixes task selection for reproducibility.
 tags:
   - nlp
   - prompt-engineering
-  - rl
-  - text
+  - reinforcement-learning
+  - cost-aware
+  - token-efficiency
   - llm
+  - openenv
+  - constrained-rl

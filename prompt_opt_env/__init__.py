@@ -1,17 +1,18 @@
-# Copyright (c) Meta Platforms, Inc. and affiliates.
-# All rights reserved.
-#
-# This source code is licensed under the BSD-style license found in the
-# LICENSE file in the root directory of this source tree.
+"""
+Prompt Opt Env / PromptRL Environment — public API.
+"""
 
-"""Prompt Opt Env Environment — public API."""
-
-from .client import PromptOptEnv
-from .models import PromptOptAction, PromptOptObservation, PromptState
+from .models import PromptAction, PromptObservation
+from .models import PromptOptAction, PromptOptObservation  # backward-compat aliases
+from .client import PromptRLEnv, PromptOptEnv  # backward-compat alias
 
 __all__ = [
+    # Canonical names (per BACKEND_STRUCTURE.md)
+    "PromptAction",
+    "PromptObservation",
+    "PromptRLEnv",
+    # Legacy aliases
     "PromptOptAction",
     "PromptOptObservation",
-    "PromptState",
     "PromptOptEnv",
 ]

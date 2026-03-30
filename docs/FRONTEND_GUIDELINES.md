@@ -1,208 +1,270 @@
-# FRONTEND_GUIDELINES.md — Interface Guidelines
-# Project: PromptOptEnv
-# Cross-reference: PRD.md Section 4 (Non-Goals), TECH_STACK.md
+# FRONTEND_GUIDELINES.md — Interface & Code Standards
+# Project: PromptRL — Cost-Aware Task-Adaptive Prompt Optimization
+# Cross-reference: PRD.md Section 4, BACKEND_STRUCTURE.md
+# Version: FINAL
+# Last updated: 2026-03-30
 
 ---
 
-## Important Note
+## 1. No Frontend — What This Document Covers
 
-PromptOptEnv has NO traditional frontend. It is a server-side RL environment. However, OpenEnv provides an optional built-in web interface (Gradio-based) that is exposed at `/web` when `ENABLE_WEB_INTERFACE=true`. This document defines how that interface should look and behave, and also defines the standards for all text output that judges will see (README, docstrings, logs).
-
----
-
-## 1. OpenEnv Web Interface (Gradio, optional debug tool)
-
-This is NOT built by us — it is generated automatically by `create_app()` when `ENABLE_WEB_INTERFACE=true`. However, understanding it helps during debugging.
-
-When enabled, the interface at `http://localhost:8000/web` shows:
-- Left pane: Human Agent — input fields for action selection, submit button
-- Right pane: State observation — current prompt, score, step count, reward
-
-To enable during development only:
-```bash
-ENABLE_WEB_INTERFACE=true uv run server
-```
-
-Do NOT enable in production HF Spaces deployment — it adds Gradio dependency and slows the container.
+PromptRL has no browser interface. "Frontend" here means every human-facing output: terminal logs, JSON response shape, README standards, code style rules, and openenv.yaml description quality. These are what judges read during both programmatic and LLM-based evaluation.
 
 ---
 
-## 2. Terminal / Log Output Standards
+## 2. Terminal Log Standards
 
-All `print()` and logging calls must follow this format so that during demo/debugging, output is readable.
+All print() statements in the environment server follow this format.
 
-### Log format
+### Format
 ```
-[PromptOptEnv] [RESET] episode_id=abc123 task_id=3 initial_score=0.12
-[PromptOptEnv] [STEP 1] action=REPHRASE new_score=0.28 reward=+0.16 done=False
-[PromptOptEnv] [STEP 2] action=ADD_EXAMPLE new_score=0.51 reward=+0.23 done=False
-[PromptOptEnv] [GRADER] called HF API — model=Mistral-7B status=200 time=1.2s
-[PromptOptEnv] [GRADER] ROUGE-L computed — score=0.51
-[PromptOptEnv] [DONE] reason=max_steps total_reward=0.71 final_score=0.83
+[PromptRL] [{LEVEL}] {message}
 ```
 
-### Colours in terminal (use only if output is a TTY)
+### Examples
+```
+[PromptRL] [BOOT] grader=rouge alpha=0.02 max_steps=7 api_base=https://api-inference.huggingface.co/v1/
+[PromptRL] [RESET] episode=a1b2c3 task_id=11 task=Git merge conflict tokens=4/55 score=0.0500
+[PromptRL] [STEP 1] action=ADD_CONTEXT score=0.1500 tokens=14/55 overhead=+10 reward=+0.0500
+[PromptRL] [STEP 2] action=SHORTEN score=0.1700 tokens=10/55 overhead=-4 reward=+0.1000
+[PromptRL] [LLM] Called OpenAI client model=Mistral-7B time=1.4s status=ok
+[PromptRL] [LLM] Fallback to dummy output (error: timeout)
+[PromptRL] [DONE] reason=voluntary_stop final_score=0.6200 tokens=22/55 efficiency=0.0282
+[PromptRL] [WARN] Budget exceeded — action rejected (would be 58/55 tokens)
+[PromptRL] [WARN] No-op detected — prompt unchanged
+[PromptRL] [WARN] Stuck — same action 3× (penalty applied)
+```
+
+### Colour codes (only when stdout is a TTY)
 ```python
 import sys
 USE_COLOR = sys.stdout.isatty()
-
 GREEN  = "\033[92m" if USE_COLOR else ""
 YELLOW = "\033[93m" if USE_COLOR else ""
 RED    = "\033[91m" if USE_COLOR else ""
+CYAN   = "\033[96m" if USE_COLOR else ""
 RESET  = "\033[0m"  if USE_COLOR else ""
-
-# Usage:
-print(f"{GREEN}[PromptOptEnv] [RESET]{RESET} episode started")
-print(f"{YELLOW}[PromptOptEnv] [GRADER]{RESET} calling HF API...")
-print(f"{RED}[PromptOptEnv] [WARN]{RESET} HF API failed, falling back to rouge")
 ```
 
 ---
 
-## 3. README.md Presentation Standards
+## 3. Python Code Style Standards
 
-The README is a first-class deliverable because the LLM scoring judge reads it. It must be clear, well-structured, and professional.
+Meta engineers will review the code. All code must follow these rules.
 
-### Required sections in README (in order):
-1. Title + one-line description
-2. Environment overview (what the agent does, what the reward is)
-3. Quick start (exact commands to install and run)
-4. Action space table (all 5 actions with descriptions)
-5. Observation space table (all fields with types)
-6. Reward function explanation (formula + special cases)
-7. Task bank overview (categories + count)
-8. Configuration (all env vars with defaults)
-9. Example training loop (Python code snippet)
-10. Deployment (how to push to HF Spaces)
-11. Round 2 roadmap (what will be added)
-
-### Writing style for README:
-- Short sentences. One idea per sentence.
-- Active voice. "The agent takes an action" not "An action is taken by the agent."
-- Use tables for structured data (action space, obs space, config).
-- Use code blocks for all commands and code snippets.
-- Do NOT use vague terms like "state-of-the-art" or "powerful."
-- Be precise: "ROUGE-L F1 score" not "a score."
-
----
-
-## 4. Code Style Standards
-
-Because code quality is evaluated by Meta engineers, all Python code must follow these rules:
-
-### Naming conventions
+### Naming
 ```python
 # Classes: PascalCase
-class PromptOptEnvironment(Environment):
-class PromptAction(Action):
-class PromptObservation(Observation):
+class PromptRLEnvironment(Environment): ...
+class PromptAction(BaseModel): ...
+class PromptObservation(BaseModel): ...
 
-# Functions and methods: snake_case
-def reset(self) -> PromptObservation:
-def _apply_action(self, action_id: int, prompt: str) -> str:
+# Functions/methods: snake_case
+def reset(self) -> PromptObservation: ...
+def _compute_reward(self, quality_delta: float, token_overhead: int) -> float: ...
 
 # Constants: UPPER_SNAKE_CASE
-MAX_STEPS = 5
-DONE_THRESHOLD = 0.85
-TASK_BANK: list[dict] = [...]
-
-# Variables: snake_case
-current_score: float
-task_description: str
+MAX_STEPS: int = 7
+DONE_THRESHOLD: float = 0.85
+TOKEN_PENALTY_ALPHA: float = 0.02
+TASK_BANK: list[Task] = [...]
+DUMMY_OUTPUTS: dict[int, str] = {...}
 ```
 
-### Type hints — mandatory on all functions
+### Type hints — mandatory on every function
 ```python
-# Every function must have full type hints
-def score(self, prompt: str, reference: str) -> float:
-def add_context(prompt: str, task_description: str) -> str:
-def clip_reward(reward: float, min_val: float = -1.0, max_val: float = 1.0) -> float:
+def score(self, prompt: str, reference: str, task_id: int) -> tuple[float, str]: ...
+def count_tokens(text: str) -> int: ...
+def compute_reward(self, quality_delta: float, token_overhead: int) -> float: ...
 ```
 
-### Docstrings — mandatory on all classes and public methods
+### Docstrings — mandatory on every class and public method
 ```python
-class PromptOptEnvironment(Environment):
+class PromptRLEnvironment(Environment):
     """
-    OpenEnv RL environment for prompt optimization.
+    OpenEnv RL environment for cost-aware prompt optimisation.
 
-    The agent iteratively edits a prompt to maximize the quality
-    of an LLM's output, measured by ROUGE-L against a reference answer.
+    The agent edits a prompt using 6 actions (5 editing + STOP) to maximise
+    output quality while respecting a token budget. Reward = quality_delta
+    minus alpha * token_overhead. Exceeding the token budget terminates the
+    episode with a penalty, teaching agents to plan token usage.
 
-    Args:
-        max_steps: Maximum actions per episode. Default: 5.
-        grader: Grading strategy. One of 'rouge', 'hf_api'. Default: 'rouge'.
-        hf_token: HuggingFace token for hf_api grader. Optional.
+    Configuration via environment variables:
+        GRADER             — 'rouge' or 'openai_client'. Default: 'rouge'.
+        MAX_STEPS          — Max steps per episode. Default: 7.
+        DONE_THRESHOLD     — ROUGE-L for success. Default: 0.85.
+        TOKEN_PENALTY_ALPHA — Cost penalty coefficient. Default: 0.02.
+        API_BASE_URL       — OpenAI-compatible endpoint.
+        MODEL_NAME         — Model identifier.
+        HF_TOKEN           — API key.
     """
 ```
 
-### Maximum line length: 100 characters
-### Indentation: 4 spaces (no tabs)
-### Blank lines: 2 between top-level definitions, 1 between methods
-
----
-
-## 5. Error Messages — User-facing strings
-
-All error messages must be descriptive. No bare `raise ValueError("bad")`.
+### Style rules
+- Maximum line length: 100 characters
+- Indentation: 4 spaces — no tabs
+- Two blank lines between top-level definitions
+- One blank line between methods inside a class
+- Descriptive error messages:
 
 ```python
-# Bad
+# Wrong:
 raise ValueError("bad action")
 
-# Good
+# Right:
 raise ValueError(
-    f"Invalid action_id={action_id}. "
-    f"Must be an integer in {{0, 1, 2, 3, 4}}. "
-    f"Received type={type(action_id).__name__}."
+    f"Invalid action_id={action_id}. Must be integer in {{0,1,2,3,4,5}}. "
+    f"Action 5 = STOP (voluntary episode end). "
+    f"Received type={type(action_id).__name__}, value={action_id!r}."
 )
 ```
 
----
+### Import order
+```python
+# Standard library
+import os, sys, random
+from uuid import uuid4
+from dataclasses import dataclass
 
-## 6. openenv.yaml — Presentation
+# Third-party
+from openai import OpenAI
+from pydantic import BaseModel, Field
+from rouge_score import rouge_scorer
+import numpy as np
 
-The manifest is also read by the LLM judge. The `description` field must be a clear, complete English paragraph:
+# OpenEnv
+from openenv.core.env_server.interfaces import Environment
+from openenv.core.env_server.types import State
 
-```yaml
-description: >
-  PromptOptEnv is a Reinforcement Learning environment built on Meta's OpenEnv framework.
-  The agent observes a task description and a current prompt string, then takes one of five
-  deterministic editing actions (add context, shorten, add example, rephrase, add constraint)
-  to improve the prompt. After each action, the environment scores the improved prompt's output
-  using ROUGE-L against a reference answer and returns the score delta as the reward signal.
-  Episodes run for a maximum of 5 steps or terminate early on success (score > 0.85).
-  This environment is designed to train agents to perform automatic prompt engineering,
-  directly relevant to LLM post-training and RLHF research.
+# Internal
+from ..models import PromptAction, PromptObservation
+from .task_bank import TASK_BANK
 ```
 
 ---
 
-## 7. Observation JSON — What judges see
+## 4. JSON Response Standards
 
-When the programmatic checker calls your env, the JSON it receives must be clean and complete. Example of what a valid step response looks like:
+Every `step()` and `reset()` response must contain ALL fields below. The programmatic checker accesses fields by name — a missing field is immediate disqualification.
 
+### Required JSON shape
 ```json
 {
   "observation": {
-    "task_description": "Summarise the plot of Romeo and Juliet in exactly 2 sentences",
-    "current_prompt": "Summarise Romeo and Juliet. Example output format: [2 concise sentences]. Requirement: Exactly 2 sentences.",
-    "previous_prompt": "Summarise Romeo and Juliet. Example output format: [2 concise sentences].",
-    "current_score": 0.72,
-    "previous_score": 0.51,
-    "reward": 0.21,
+    "task_description": "Describe the steps to resolve a Git merge conflict",
+    "current_prompt": "Resolve merge conflict.\nContext: A Git merge conflict...",
+    "previous_prompt": "Resolve merge conflict.",
+    "current_score": 0.2800,
+    "previous_score": 0.1500,
+    "current_token_count": 14,
+    "previous_token_count": 4,
+    "token_budget": 55,
+    "tokens_remaining": 41,
+    "token_overhead": 10,
+    "reward": 0.0500,
     "done": false,
-    "step_count": 3,
-    "reference_answer": "Romeo and Juliet is a tragedy about two young lovers from feuding families who die for each other. Their deaths ultimately reconcile their families.",
+    "step_count": 1,
+    "reference_answer": "1. Run git merge... 2. Open conflicted file...",
     "info": {
       "grader_used": "rouge",
-      "action_applied": "ADD_CONSTRAINT",
+      "action_applied": "ADD_CONTEXT",
       "stuck_count": 0,
-      "llm_output_preview": "Romeo and Juliet follows two young lovers from rival families..."
+      "termination_reason": null,
+      "llm_output_preview": "To resolve a git merge conflict you need to...",
+      "no_op": false
     }
   },
-  "reward": 0.21,
+  "reward": 0.0500,
   "done": false
 }
 ```
 
-Every field must always be present — no optional fields that might be missing. Judges' programmatic checks will access these fields by name.
+### Field rules
+- `current_score`, `previous_score`: floats in [0.0, 1.0], rounded to 4 decimal places
+- `reward`: float in [−2.0, +2.0], rounded to 4 decimal places
+- `current_token_count`, `previous_token_count`, `token_budget`, `tokens_remaining`, `token_overhead`: all integers
+- `done`: always boolean — never null or string
+- `step_count`: integer starting at 0 after reset, 1 after first step
+- `info["grader_used"]`: one of `"rouge"`, `"openai_client"`, `"rouge_fallback"`
+- `info["action_applied"]`: one of `"ADD_CONTEXT"`, `"SHORTEN"`, `"ADD_EXAMPLE"`, `"REPHRASE"`, `"ADD_CONSTRAINT"`, `"STOP"`, or `null` on reset
+- `info["termination_reason"]`: one of `"success"`, `"max_steps"`, `"stuck"`, `"budget_exceeded"`, `"voluntary_stop"`, or `null` if not done
+- `info["no_op"]`: boolean
+
+---
+
+## 5. README Standards (judge-facing document)
+
+### Required sections in order
+1. Project title + one-line description
+2. The differentiation (why existing tools fail at this; what makes this novel)
+3. Quick start (copy-paste ready commands)
+4. Action space table (all 6 actions, effect on quality AND tokens)
+5. Observation space table (all fields with types)
+6. Reward function (formula as code block, all special cases, worked example)
+7. Token budget mechanics (what happens when budget exceeded)
+8. Task bank (table with all 15 tasks including token_budget column)
+9. Configuration table (required/optional, with defaults)
+10. Baseline scores (table with quality, token count, efficiency per task)
+11. Example training loop
+12. Running tests
+13. Deployment to HF Spaces
+14. Round 2 roadmap
+
+### Writing rules
+- Lead with the differentiation. The first paragraph after the title must explain what makes this different from DSPy/OPRO/TextGrad.
+- Precision: "combined reward = ROUGE-L delta − α × token overhead" not "a combined score"
+- Show the worked example in the README — it is the clearest way to explain the cost-aware mechanic
+- All terminal commands copy-paste ready (no `<placeholder>` that isn't explained)
+
+---
+
+## 6. openenv.yaml Description Quality
+
+The `description` field is read by the LLM scoring judge. It must be a complete, differentiated paragraph. Do not just say "an RL environment." Explain why it is novel.
+
+The full description is in TECH_STACK.md Section 11. Do not shorten it.
+
+---
+
+## 7. inference.py Output Standards
+
+```
+============================================================
+PromptRL — Cost-Aware Baseline Inference Script
+Model    : mistralai/Mistral-7B-Instruct-v0.2
+Endpoint : https://api-inference.huggingface.co/v1/
+Alpha    : 0.02
+============================================================
+
+  Task (easy): Explain what machine learning is to a 10-year-old
+  Token budget  : 80
+  Initial tokens: 3   initial_prompt: 'explain machine learning'
+  Initial score : 0.1200
+  Step 1: action=ADD_CONTEXT  score=0.1500 tokens=13/80 overhead=+10 reward=+0.0500
+  Step 2: action=REPHRASE     score=0.1700 tokens=13/80 overhead= +0 reward=+0.0200
+  Step 3: action=SHORTEN      score=0.1600 tokens=10/80 overhead= -3 reward=+0.0300
+  Step 4: action=STOP         score=0.1600 stop_bonus=0.2400        reward=+0.2400
+  [DONE] reason=voluntary_stop
+
+  Task (medium): ...
+  [same format]
+
+  Task (hard): ...
+  [same format]
+
+============================================================
+BASELINE SCORES SUMMARY
+============================================================
+Difficulty  Score  Tokens  Budget  Efficiency  Reward  Steps
+------------------------------------------------------------------
+easy        0.4800     22      80      0.0218  0.6300      5
+medium      0.3500     35      65      0.0100  0.3100      6
+hard        0.2400     28      55      0.0073  0.2200      7
+------------------------------------------------------------------
+Average     0.3567
+Efficiency = final_score / final_token_count (higher = better)
+
+All scores are ROUGE-L F1 in [0.0, 1.0]. Script complete.
+```
+
+Rules: all scores 4 decimal places, all tokens integers, exits code 0 always, no input() calls, all exceptions caught.

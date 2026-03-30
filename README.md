@@ -240,7 +240,7 @@ Then set `HF_TOKEN` as a secret in your Space settings.
 ## Author
 
 Shyam — B.Tech Data Science, Annamacharya University, Rajampet, AP, India
-Submitted solo to the Meta x Scaler OpenEnv Hackathon 2026.
+Submitted to the Meta x Scaler OpenEnv Hackathon 2026.
 
 ---
 

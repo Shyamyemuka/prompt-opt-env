@@ -1,10 +1,4 @@
-# Copyright (c) Meta Platforms, Inc. and affiliates.
-# All rights reserved.
-#
-# This source code is licensed under the BSD-style license found in the
-# LICENSE file in the root directory of this source tree.
-
-"""Prompt Opt Env — WebSocket Client."""
+"""Prompt Opt Env / PromptRL — WebSocket Client."""
 
 from typing import Dict
 
@@ -12,14 +6,14 @@ from openenv.core import EnvClient
 from openenv.core.client_types import StepResult
 from openenv.core.env_server.types import State
 
-from .models import PromptOptAction, PromptOptObservation
+from .models import PromptAction, PromptObservation
 
 
-class PromptOptEnv(
-    EnvClient[PromptOptAction, PromptOptObservation, State]
+class PromptRLEnv(
+    EnvClient[PromptAction, PromptObservation, State]
 ):
     """
-    Client for the PromptOptEnv RL environment.
+    Client for the PromptRL RL environment.
 
     Maintains a persistent WebSocket connection to the environment server,
     enabling efficient multi-step interactions with lower latency.
@@ -27,43 +21,50 @@ class PromptOptEnv(
 
     Example::
 
-        async with PromptOptEnv(base_url="http://localhost:8000") as env:
+        async with PromptRLEnv(base_url="http://localhost:8000") as env:
             result = await env.reset()
-            print(result.observation.task_description)
+            obs = result.observation
+            print(obs.task_description)
+            print(f"Budget: {obs.token_budget} tokens | Current: {obs.current_token_count}")
 
-            result = await env.step(PromptOptAction(action_id=2))
+            result = await env.step(PromptAction(action_id=5))  # STOP
             print(f"reward={result.reward:.3f} done={result.done}")
     """
 
-    def _step_payload(self, action: PromptOptAction) -> Dict:
+    def _step_payload(self, action: PromptAction) -> Dict:
         """
-        Convert PromptOptAction to JSON payload for the step WebSocket message.
+        Convert PromptAction to JSON payload for the step WebSocket message.
 
         Args:
-            action: PromptOptAction instance with action_id 0–4.
+            action: PromptAction instance with action_id 0–5.
 
         Returns:
             Dictionary with 'action_id' key.
         """
         return {"action_id": action.action_id}
 
-    def _parse_result(self, payload: Dict) -> StepResult[PromptOptObservation]:
+    def _parse_result(self, payload: Dict) -> StepResult[PromptObservation]:
         """
-        Parse server response into StepResult[PromptOptObservation].
+        Parse server response into StepResult[PromptObservation].
 
         Args:
             payload: JSON response data from the server.
 
         Returns:
-            StepResult with a fully populated PromptOptObservation.
+            StepResult with a fully populated PromptObservation.
         """
         obs_data = payload.get("observation", {})
-        observation = PromptOptObservation(
+        observation = PromptObservation(
             task_description=obs_data.get("task_description", ""),
             current_prompt=obs_data.get("current_prompt", ""),
             previous_prompt=obs_data.get("previous_prompt", ""),
             current_score=obs_data.get("current_score", 0.0),
             previous_score=obs_data.get("previous_score", 0.0),
+            current_token_count=obs_data.get("current_token_count", 0),
+            previous_token_count=obs_data.get("previous_token_count", 0),
+            token_budget=obs_data.get("token_budget", 80),
+            tokens_remaining=obs_data.get("tokens_remaining", 80),
+            token_overhead=obs_data.get("token_overhead", 0),
             reward=obs_data.get("reward", payload.get("reward", 0.0)),
             done=obs_data.get("done", payload.get("done", False)),
             step_count=obs_data.get("step_count", 0),
@@ -91,3 +92,7 @@ class PromptOptEnv(
             episode_id=payload.get("episode_id", ""),
             step_count=payload.get("step_count", 0),
         )
+
+
+# Backward-compat alias
+PromptOptEnv = PromptRLEnv
