@@ -6,6 +6,24 @@ __pycache__/
 .coverage
 htmlcov/
 dist/
+build/
 *.egg-info/
 .venv/
 venv/
+uv.lock
+.DS_Store
+*.log
+
+# Sensitive Files
+.env.*
+.env.local
+
+# Temporary / Debug Logs
+out.txt
+out2.txt
+prompt_opt_env/docker_build.txt
+prompt_opt_env/uv_error.txt
+.claude/
+
+# Documentation
+docs/

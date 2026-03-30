@@ -1,5 +1,5 @@
 """
-Typed Pydantic v2 models for PromptRL.
+Typed Pydantic v2 models for PromptOptEnv.
 All fields always present — no Optional fields that might be missing.
 The programmatic checker accesses fields by name.
 """

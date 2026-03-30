@@ -1,16 +1,16 @@
 """
-Prompt Opt Env / PromptRL Environment — public API.
+Prompt Opt Env / PromptOptEnv Environment — public API.
 """
 
 from .models import PromptAction, PromptObservation
 from .models import PromptOptAction, PromptOptObservation  # backward-compat aliases
-from .client import PromptRLEnv, PromptOptEnv  # backward-compat alias
+from .client import PromptOptEnvEnv, PromptOptEnv  # backward-compat alias
 
 __all__ = [
     # Canonical names (per BACKEND_STRUCTURE.md)
     "PromptAction",
     "PromptObservation",
-    "PromptRLEnv",
+    "PromptOptEnvEnv",
     # Legacy aliases
     "PromptOptAction",
     "PromptOptObservation",

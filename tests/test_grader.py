@@ -1,7 +1,7 @@
-"""Unit tests for the Grader (ROUGE scoring + HF API fallback)."""
+"""Unit tests for the Grader (ROUGE scoring + OpenAI Python client fallback)."""
 
 import pytest
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 
 from prompt_opt_env.server.grader import Grader, DUMMY_OUTPUTS
 
@@ -22,7 +22,7 @@ def test_rouge_score_is_nonzero_for_related_content():
     assert score14 >= score0
 
 
-def test_rouge_output_is_dummy_when_no_hf_token():
+def test_rouge_output_is_dummy_when_no_api_token():
     grader = Grader(grader_type="rouge")
     _, output = grader.score("test prompt", "any reference", task_id=5)
     assert output == DUMMY_OUTPUTS[5]
@@ -30,20 +30,21 @@ def test_rouge_output_is_dummy_when_no_hf_token():
 
 def test_clip_reward_within_range():
     assert Grader.clip_reward(0.5) == 0.5
-    assert Grader.clip_reward(1.5) == 1.5  # within [-1, 2]
+    assert Grader.clip_reward(2.0) == 2.0  # within [-2.0, 2.0]
+    assert Grader.clip_reward(-2.0) == -2.0 # range is wider now
 
 
 def test_clip_reward_lower_bound():
-    assert Grader.clip_reward(-2.0) == -1.0  # clipped at -1
+    assert Grader.clip_reward(-2.5) == -2.0  # clipped at -2.0
 
 
 def test_clip_reward_upper_bound():
-    assert Grader.clip_reward(3.0) == 2.0  # clipped at 2
+    assert Grader.clip_reward(3.0) == 2.0  # clipped at 2.0
 
 
-def test_hf_api_fallback_on_failure():
-    grader = Grader(grader_type="hf_api", hf_token="fake_token_for_test")
-    with patch.object(grader, "_call_hf_api", side_effect=Exception("API down")):
+def test_openai_api_fallback_on_failure():
+    grader = Grader(grader_type="openai_client")
+    with patch.object(grader, "_call_llm", side_effect=Exception("API down")):
         score, output = grader.score("test prompt", "reference answer", task_id=0)
     assert isinstance(score, float)
     assert 0.0 <= score <= 1.0

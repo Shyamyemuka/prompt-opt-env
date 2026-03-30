@@ -1,5 +1,5 @@
 """
-Core RL environment for PromptRL: cost-aware prompt optimisation.
+Core RL environment for PromptOptEnv: cost-aware prompt optimisation.
 Reward = quality_delta - alpha * token_overhead.
 Token budget enforcement terminates episode on breach.
 STOP action (action_id=5) lets agent voluntarily end with quality bonus.
@@ -16,7 +16,7 @@ try:
     from .actions import apply_action, count_tokens, ACTION_NAMES
     from .grader import Grader
     from .task_bank import TASK_BANK, Task
-except ImportError:
+except (ModuleNotFoundError, ImportError):
     from models import PromptAction, PromptObservation
     from server.actions import apply_action, count_tokens, ACTION_NAMES
     from server.grader import Grader
@@ -31,7 +31,7 @@ GRADER_TYPE: str          = os.getenv("GRADER", "rouge")
 _TASK_SEED: str | None    = os.getenv("TASK_SEED", None)
 
 
-class PromptRLEnvironment(Environment):
+class PromptOptEnvEnvironment(Environment):
     """
     Cost-aware prompt optimisation RL environment.
 
@@ -330,4 +330,4 @@ class PromptRLEnvironment(Environment):
 
 
 # Backward-compat alias
-PromptOptEnvironment = PromptRLEnvironment
+PromptOptEnvironment = PromptOptEnvEnvironment

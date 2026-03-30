@@ -1,4 +1,4 @@
-"""Prompt Opt Env / PromptRL — WebSocket Client."""
+"""Prompt Opt Env / PromptOptEnv — WebSocket Client."""
 
 from typing import Dict
 
@@ -9,11 +9,11 @@ from openenv.core.env_server.types import State
 from .models import PromptAction, PromptObservation
 
 
-class PromptRLEnv(
+class PromptOptEnvEnv(
     EnvClient[PromptAction, PromptObservation, State]
 ):
     """
-    Client for the PromptRL RL environment.
+    Client for the PromptOptEnv RL environment.
 
     Maintains a persistent WebSocket connection to the environment server,
     enabling efficient multi-step interactions with lower latency.
@@ -21,7 +21,7 @@ class PromptRLEnv(
 
     Example::
 
-        async with PromptRLEnv(base_url="http://localhost:8000") as env:
+        async with PromptOptEnvEnv(base_url="http://localhost:8000") as env:
             result = await env.reset()
             obs = result.observation
             print(obs.task_description)
@@ -95,4 +95,4 @@ class PromptRLEnv(
 
 
 # Backward-compat alias
-PromptOptEnv = PromptRLEnv
+PromptOptEnv = PromptOptEnvEnv

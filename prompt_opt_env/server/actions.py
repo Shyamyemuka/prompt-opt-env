@@ -1,5 +1,5 @@
 """
-Six action functions for PromptRL.
+Six action functions for PromptOptEnv.
 Actions 0–4: deterministic prompt edits (no LLM calls, no randomness).
 Action 5: STOP — handled in environment, not here.
 """
@@ -7,7 +7,7 @@ import re
 
 try:
     from .task_bank import Task
-except ImportError:
+except (ModuleNotFoundError, ImportError):
     from task_bank import Task
 
 
@@ -42,7 +42,7 @@ def count_tokens(text: str) -> int:
 def apply_action(action_id: int, current_prompt: str, task: Task) -> str:
     """
     Apply one of actions 0–4 to the prompt. Action 5 (STOP) is handled
-    by PromptRLEnvironment directly.
+    by PromptOptEnvEnvironment directly.
 
     Returns new prompt string. May equal current_prompt (no-op) — caller detects this.
 

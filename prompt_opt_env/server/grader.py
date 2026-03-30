@@ -1,5 +1,5 @@
 """
-Grading logic for PromptRL.
+Grading logic for PromptOptEnv.
 ALL LLM calls use the OpenAI Python client — required by hackathon rules.
 Never use httpx or requests for LLM calls.
 
@@ -88,14 +88,14 @@ DUMMY_OUTPUTS: dict[int, str] = {
 def _make_client() -> OpenAI:
     """Create OpenAI client from environment variables."""
     return OpenAI(
-        base_url=os.getenv("API_BASE_URL", "https://api-inference.huggingface.co/v1/"),
+        base_url=os.getenv("API_BASE_URL", "https://router.huggingface.co/v1/"),
         api_key=os.getenv("HF_TOKEN", ""),
     )
 
 
 class Grader:
     """
-    Reward computation for PromptRL.
+    Reward computation for PromptOptEnv.
     Uses OpenAI Python client for all LLM calls (hackathon requirement).
 
     Args:
@@ -104,7 +104,7 @@ class Grader:
 
     def __init__(self, grader_type: str = "rouge", **kwargs) -> None:
         self.grader_type = grader_type
-        self.model_name = os.getenv("MODEL_NAME", "mistralai/Mistral-7B-Instruct-v0.2")
+        self.model_name = os.getenv("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
 
     def score(self, prompt: str, reference_answer: str, task_id: int) -> tuple[float, str]:
         """
@@ -123,7 +123,7 @@ class Grader:
             try:
                 return self._call_llm(prompt)
             except Exception as e:
-                print(f"[PromptRL] [LLM] Fallback to dummy (error: {e})", file=sys.stderr)
+                print(f"[PromptOptEnv] [LLM] Fallback to dummy (error: {e})", file=sys.stderr)
                 return DUMMY_OUTPUTS.get(task_id, "")
         return DUMMY_OUTPUTS.get(task_id, "")
 

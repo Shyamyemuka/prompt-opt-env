@@ -1,9 +1,9 @@
-name: prompt-rl
+name: prompt-opt-env
 version: 0.1.0
 description: >
-  PromptRL is a cost-aware Reinforcement Learning environment for task-adaptive
+  PromptOptEnv is a cost-aware Reinforcement Learning environment for task-adaptive
   prompt optimisation. Unlike existing tools (DSPy, TextGrad, OPRO) that maximise
-  quality with unlimited token budgets, PromptRL trains agents to maximise
+  quality with unlimited token budgets, PromptOptEnv trains agents to maximise
   output quality per token spent. The reward is shaped by two competing objectives:
   ROUGE-L quality improvement minus a token cost penalty. Each task has a hard token
   budget; exceeding it terminates the episode with a penalty. A STOP action lets the
@@ -20,11 +20,11 @@ env_vars:
   - name: API_BASE_URL
     required: true
     secret: false
-    description: OpenAI-compatible API endpoint (e.g. https://api-inference.huggingface.co/v1/)
+    description: OpenAI-compatible API endpoint (e.g. https://router.huggingface.co/v1/)
   - name: MODEL_NAME
     required: true
     secret: false
-    description: Model identifier (e.g. mistralai/Mistral-7B-Instruct-v0.2)
+    description: Model identifier (e.g. Qwen/Qwen2.5-72B-Instruct)
   - name: HF_TOKEN
     required: true
     secret: true

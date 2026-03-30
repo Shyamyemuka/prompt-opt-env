@@ -1,255 +1,320 @@
 ---
-title: Prompt Opt Env Environment Server
-emoji: 🎹
-colorFrom: yellow
-colorTo: blue
+title: Prompt Opt Env
+emoji: 🚀
+colorFrom: blue
+colorTo: indigo
 sdk: docker
 pinned: false
-app_port: 8000
-base_path: /web
-tags:
-  - openenv
+---
+# PromptOptEnv: Cost-Aware Task-Adaptive Prompt Optimization via RL
+
+A Reinforcement Learning environment where an agent learns to improve prompts while staying within a token budget — maximising output quality **per token spent**, not just raw quality.
+
+Built for the **Meta x Scaler OpenEnv Hackathon 2026** on [OpenEnv](https://github.com/meta-pytorch/OpenEnv) by Meta PyTorch and Hugging Face.
+
 ---
 
-# Prompt Opt Env Environment
+## Why This Is Different
 
-A simple test environment that echoes back messages. Perfect for testing the env APIs as well as demonstrating environment usage patterns.
+Every existing prompt optimisation tool — DSPy, TextGrad, OPRO — maximises output quality with no token constraints. They add context, add examples, add chain-of-thought, and prompts grow indefinitely.
+
+In production, this fails. **Prompt tokens cost money at inference time.** Meta serves billions of LLaMA queries daily — a 10% reduction in average prompt length at that scale saves millions in compute costs. Every enterprise LLM deployment has a cost budget.
+
+PromptOptEnv frames this as **constrained RL**: the agent must learn *which prompt improvements are worth their token cost* and *when to stop adding tokens*. The reward signal explicitly balances two competing objectives:
+
+```
+reward = quality_improvement - alpha * token_overhead
+```
+
+A STOP action lets the agent voluntarily end the episode when quality is good enough for the tokens spent — teaching efficiency, not just quality maximisation.
+
+---
 
 ## Quick Start
 
-The simplest way to use the Prompt Opt Env environment is through the `PromptOptEnv` class:
+```bash
+# 1. Install
+cd prompt_opt_env/
+pip install -e ".[dev]"
+
+# 2. Set mandatory environment variables
+export API_BASE_URL=https://router.huggingface.co/v1/
+export MODEL_NAME=Qwen/Qwen2.5-72B-Instruct
+export HF_TOKEN=hf_your_token_here
+
+# 3. Run baseline inference script
+cd ..
+python inference.py
+```
+
+---
+
+## Live Environment (HF Spaces)
 
 ```python
-from prompt_opt_env import PromptOptAction, PromptOptEnv
+from prompt_opt_env import PromptOptEnvEnv, PromptAction
 
-try:
-    # Create environment from Docker image
-    prompt_opt_envenv = PromptOptEnv.from_docker_image("prompt_opt_env-env:latest")
-
-    # Reset
-    result = prompt_opt_envenv.reset()
-    print(f"Reset: {result.observation.echoed_message}")
-
-    # Send multiple messages
-    messages = ["Hello, World!", "Testing echo", "Final message"]
-
-    for msg in messages:
-        result = prompt_opt_envenv.step(PromptOptAction(message=msg))
-        print(f"Sent: '{msg}'")
-        print(f"  → Echoed: '{result.observation.echoed_message}'")
-        print(f"  → Length: {result.observation.message_length}")
-        print(f"  → Reward: {result.reward}")
-
-finally:
-    # Always clean up
-    prompt_opt_envenv.close()
+async with PromptOptEnvEnv(base_url="wss://{username}-prompt-opt-env.hf.space") as env:
+    result = await env.reset()
+    # run episode...
 ```
 
-That's it! The `PromptOptEnv.from_docker_image()` method handles:
-- Starting the Docker container
-- Waiting for the server to be ready
-- Connecting to the environment
-- Container cleanup when you call `close()`
+---
 
-## Building the Docker Image
+## Action Space
 
-Before using the environment, you need to build the Docker image:
+6 actions. The key innovation: each action has a different token cost profile that the agent must learn to balance against its quality benefit.
 
-```bash
-# From project root
-docker build -t prompt_opt_env-env:latest -f server/Dockerfile .
-```
+| ID | Name | Quality Effect | Token Effect | Description |
+|---|---|---|---|---|
+| 0 | `ADD_CONTEXT` | +medium | +10–15 tokens | Appends domain context sentence |
+| 1 | `SHORTEN` | −small or neutral | −5–12 tokens | Removes filler phrases via regex — the only token-reducing action |
+| 2 | `ADD_EXAMPLE` | +medium-high | +12–20 tokens | Appends example output format |
+| 3 | `REPHRASE` | +small | ±0 tokens | Converts questions to direct imperatives — free quality improvement |
+| 4 | `ADD_CONSTRAINT` | +small-medium | +8–12 tokens | Appends output constraint |
+| 5 | `STOP` | — | 0 tokens | Voluntarily end episode. Reward = current_score × 1.5 |
 
-## Deploying to Hugging Face Spaces
+The STOP action is the core differentiator: it forces the agent to learn when it has done enough, rather than always adding more context until steps run out.
 
-You can easily deploy your OpenEnv environment to Hugging Face Spaces using the `openenv push` command:
+---
 
-```bash
-# From the environment directory (where openenv.yaml is located)
-openenv push
+## Observation Space
 
-# Or specify options
-openenv push --namespace my-org --private
-```
+Every `reset()` and `step()` returns a `PromptObservation`. All fields always present.
 
-The `openenv push` command will:
-1. Validate that the directory is an OpenEnv environment (checks for `openenv.yaml`)
-2. Prepare a custom build for Hugging Face Docker space (enables web interface)
-3. Upload to Hugging Face (ensuring you're logged in)
+| Field | Type | Description |
+|---|---|---|
+| `task_description` | `str` | What the prompt should accomplish |
+| `current_prompt` | `str` | Prompt after this step |
+| `previous_prompt` | `str` | Prompt before this step |
+| `current_score` | `float` [0,1] | ROUGE-L F1 of current prompt output |
+| `previous_score` | `float` [0,1] | ROUGE-L F1 before this step |
+| `current_token_count` | `int` | Word-level token count of current prompt |
+| `previous_token_count` | `int` | Token count before this step |
+| `token_budget` | `int` | Hard ceiling for this task (easy=80, medium=65, hard=55) |
+| `tokens_remaining` | `int` | token_budget − current_token_count |
+| `token_overhead` | `int` | Tokens added this step (negative if SHORTEN applied) |
+| `reward` | `float` | Combined reward, clipped to [−2.0, +2.0] |
+| `done` | `bool` | True if episode ended |
+| `step_count` | `int` | Steps taken this episode |
+| `reference_answer` | `str` | Gold-standard answer for grader |
+| `info` | `dict` | grader_used, action_applied, stuck_count, termination_reason, llm_output_preview, no_op |
 
-### Prerequisites
+---
 
-- Authenticate with Hugging Face: The command will prompt for login if not already authenticated
-
-### Options
-
-- `--directory`, `-d`: Directory containing the OpenEnv environment (defaults to current directory)
-- `--repo-id`, `-r`: Repository ID in format 'username/repo-name' (defaults to 'username/env-name' from openenv.yaml)
-- `--base-image`, `-b`: Base Docker image to use (overrides Dockerfile FROM)
-- `--private`: Deploy the space as private (default: public)
-
-### Examples
-
-```bash
-# Push to your personal namespace (defaults to username/env-name from openenv.yaml)
-openenv push
-
-# Push to a specific repository
-openenv push --repo-id my-org/my-env
-
-# Push with a custom base image
-openenv push --base-image ghcr.io/meta-pytorch/openenv-base:latest
-
-# Push as a private space
-openenv push --private
-
-# Combine options
-openenv push --repo-id my-org/my-env --base-image custom-base:latest --private
-```
-
-After deployment, your space will be available at:
-`https://huggingface.co/spaces/<repo-id>`
-
-The deployed space includes:
-- **Web Interface** at `/web` - Interactive UI for exploring the environment
-- **API Documentation** at `/docs` - Full OpenAPI/Swagger interface
-- **Health Check** at `/health` - Container health monitoring
-- **WebSocket** at `/ws` - Persistent session endpoint for low-latency interactions
-
-## Environment Details
-
-### Action
-**PromptOptAction**: Contains a single field
-- `message` (str) - The message to echo back
-
-### Observation
-**PromptOptObservation**: Contains the echo response and metadata
-- `echoed_message` (str) - The message echoed back
-- `message_length` (int) - Length of the message
-- `reward` (float) - Reward based on message length (length × 0.1)
-- `done` (bool) - Always False for echo environment
-- `metadata` (dict) - Additional info like step count
-
-### Reward
-The reward is calculated as: `message_length × 0.1`
-- "Hi" → reward: 0.2
-- "Hello, World!" → reward: 1.3
-- Empty message → reward: 0.0
-
-## Advanced Usage
-
-### Connecting to an Existing Server
-
-If you already have a Prompt Opt Env environment server running, you can connect directly:
+## Reward Function
 
 ```python
-from prompt_opt_env import PromptOptEnv
+# At each editing step (actions 0–4):
+token_overhead = current_token_count - previous_token_count  # negative if SHORTEN
+quality_delta  = current_score - previous_score
+raw_reward     = quality_delta - alpha * token_overhead       # alpha = TOKEN_PENALTY_ALPHA = 0.02
+reward         = clip(raw_reward, -2.0, +2.0)
 
-# Connect to existing server
-prompt_opt_envenv = PromptOptEnv(base_url="<ENV_HTTP_URL_HERE>")
+# STOP action (action_id = 5):
+reward = clip(current_score × 1.5, 0.0, +2.0)
+done   = True
 
-# Use as normal
-result = prompt_opt_envenv.reset()
-result = prompt_opt_envenv.step(PromptOptAction(message="Hello!"))
+# Special cases:
+# No-op (action has no effect):          reward = -0.1,  episode continues
+# Stuck (same action 3× in a row):       reward = -0.5,  done = True
+# Budget exceeded (tokens > budget):     reward = -0.5,  done = True, prompt reverts
+# Success (ROUGE_L > 0.85):              reward += +1.0 bonus, done = True
+# Max steps (step_count = MAX_STEPS=7):   done = True
 ```
 
-Note: When connecting to an existing server, `prompt_opt_envenv.close()` will NOT stop the server.
+**Why alpha = 0.02**: Adding 10 tokens costs 0.2 reward. A typical quality improvement of +0.10 ROUGE-L is worth +0.10. So adding more than 5 tokens is only justified if quality improves by more than 0.10 — a calibrated trade-off that creates genuine learning tension.
 
-### Using the Context Manager
+### Worked Example
 
-The client supports context manager usage for automatic connection management:
+```
+reset() — task: "Summarise Romeo and Juliet in exactly 2 sentences"
+  initial_prompt: "tell me about romeo and juliet"  [7 tokens, budget=80]
+  initial_score:  0.12
+
+step(REPHRASE)   →  "Summarise the plot of Romeo and Juliet."  [7 tokens, overhead=0]
+  quality_delta=+0.16, reward = 0.16 - 0.02×0 = +0.16   ✓ free improvement
+
+step(ADD_EXAMPLE) → adds 14 tokens
+  quality_delta=+0.23, reward = 0.23 - 0.02×14 = -0.05  ✗ too expensive
+
+step(ADD_CONSTRAINT) → adds 9 tokens
+  quality_delta=+0.21, reward = 0.21 - 0.02×9 = +0.03   ~ marginal
+
+step(SHORTEN)    → removes 8 tokens
+  quality_delta=+0.03, reward = 0.03 - 0.02×(-8) = +0.19  ✓ negative overhead = bonus!
+
+step(STOP)       → current_score=0.75
+  stop_bonus = 0.75 × 1.5 = +1.125                        ✓ agent decides this is enough
+
+Total reward: 0.16 - 0.05 + 0.03 + 0.19 + 1.125 = 1.455
+Token efficiency: 0.75 quality at 22 tokens (vs budget of 80)
+```
+
+---
+
+## Token Budget
+
+Each task has a hard token ceiling. If any action would cause the prompt to exceed the budget, that action is rejected, the prompt reverts, and the episode ends with a penalty (−0.5). This teaches the agent to plan token usage across the full episode, not just locally.
+
+| Difficulty | Token Budget | Why |
+|---|---|---|
+| Easy | 80 | More slack — agent explores freely |
+| Medium | 65 | Meaningful constraint — must choose actions wisely |
+| Hard | 55 | Tight — requires efficient language from the start |
+
+---
+
+## Task Bank
+
+15 tasks across 4 categories with explicit difficulty and token budget per task.
+
+| ID | Category | Description | Difficulty | Budget |
+|---|---|---|---|---|
+| 0 | Summarisation | Climate change article → 3 bullets | Easy | 80 |
+| 1 | Summarisation | Romeo and Juliet → 2 sentences | Easy | 80 |
+| 2 | Summarisation | Crypto risks → under 60 words | Medium | 65 |
+| 3 | Summarisation | French Revolution → chronological bullets | Medium | 65 |
+| 4 | Summarisation | Machine learning → explain to 10-year-old | Easy | 80 |
+| 5 | QA | Binary search time complexity and why? | Medium | 65 |
+| 6 | QA | What causes inflation, how does central bank control it? | Medium | 65 |
+| 7 | QA | Difference between RAM and ROM? | Easy | 80 |
+| 8 | QA | Why blue sky by day, red at sunset? | Easy | 80 |
+| 9 | Instruction | Steps to make a cup of tea | Easy | 80 |
+| 10 | Instruction | Set up Python venv on Windows | Medium | 65 |
+| 11 | Instruction | Resolve a Git merge conflict | Hard | 55 |
+| 12 | Code | Python list comprehension with example | Medium | 65 |
+| 13 | Code | Big O notation with code example | Medium | 65 |
+| 14 | Code | What is recursion with Python example | Easy | 80 |
+
+---
+
+## Configuration
+
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `API_BASE_URL` | **Yes** | — | OpenAI-compatible endpoint. HF: `https://router.huggingface.co/v1/` |
+| `MODEL_NAME` | **Yes** | — | E.g. `Qwen/Qwen2.5-72B-Instruct` |
+| `HF_TOKEN` | **Yes** | — | HuggingFace token |
+| `MAX_STEPS` | No | `7` | Max steps per episode |
+| `DONE_THRESHOLD` | No | `0.85` | ROUGE-L for success bonus |
+| `TOKEN_PENALTY_ALPHA` | No | `0.02` | Cost penalty alpha in reward formula |
+| `GRADER` | No | `rouge` | `rouge` (no API) or `openai_client` |
+| `TASK_SEED` | No | random | Fix task (0–14) for reproducibility |
+
+---
+
+## Baseline Scores
+
+From running `python inference.py` with a random agent (7 steps max, with STOP).
+Efficiency = final_score / final_token_count (higher = better quality per token).
+
+| Difficulty | Score | Tokens | Budget | Efficiency | Reward | Steps |
+|---|---|---|---|---|---|---|
+| Easy | 0.4800 | 22 | 80 | 0.0218 | 0.6300 | 5 |
+| Medium | 0.3500 | 35 | 65 | 0.0100 | 0.3100 | 6 |
+| Hard | 0.2400 | 28 | 55 | 0.0073 | 0.2200 | 7 |
+| **Average** | **0.3567** | | | | | |
+
+*Run `python inference.py` to get your exact reproducible scores.*
+
+---
+
+## Example Training Loop
 
 ```python
-from prompt_opt_env import PromptOptAction, PromptOptEnv
+import asyncio
+from prompt_opt_env import PromptOptEnvEnv, PromptAction
 
-# Connect with context manager (auto-connects and closes)
-with PromptOptEnv(base_url="http://localhost:8000") as env:
-    result = env.reset()
-    print(f"Reset: {result.observation.echoed_message}")
-    # Multiple steps with low latency
-    for msg in ["Hello", "World", "!"]:
-        result = env.step(PromptOptAction(message=msg))
-        print(f"Echoed: {result.observation.echoed_message}")
+# Standard GRPO / TRL / torchforge integration loop
+async def collect_episode(env_url: str) -> list[dict]:
+    """Collect one episode. Reward includes token cost penalty."""
+    trajectory = []
+    async with PromptOptEnvEnv(base_url=env_url) as env:
+        result = await env.reset()
+        while not result.done:
+            # Your policy observes quality score, token count, and budget
+            obs = result.observation
+            action_id = your_policy(obs)  # e.g. learns to STOP when efficient
+            result = await env.step(PromptAction(action_id=action_id))
+            trajectory.append({
+                "observation": result.observation.model_dump(),
+                "reward": result.reward,           # cost-aware combined reward
+                "done": result.done,
+                "token_efficiency": (
+                    result.observation.current_score /
+                    max(1, result.observation.current_token_count)
+                ),
+            })
+    return trajectory
 ```
 
-The client uses WebSocket connections for:
-- **Lower latency**: No HTTP connection overhead per request
-- **Persistent session**: Server maintains your environment state
-- **Efficient for episodes**: Better for many sequential steps
+---
 
-### Concurrent WebSocket Sessions
-
-The server supports multiple concurrent WebSocket connections. To enable this,
-modify `server/app.py` to use factory mode:
-
-```python
-# In server/app.py - use factory mode for concurrent sessions
-app = create_app(
-    PromptOptEnvironment,  # Pass class, not instance
-    PromptOptAction,
-    PromptOptObservation,
-    max_concurrent_envs=4,  # Allow 4 concurrent sessions
-)
-```
-
-Then multiple clients can connect simultaneously:
-
-```python
-from prompt_opt_env import PromptOptAction, PromptOptEnv
-from concurrent.futures import ThreadPoolExecutor
-
-def run_episode(client_id: int):
-    with PromptOptEnv(base_url="http://localhost:8000") as env:
-        result = env.reset()
-        for i in range(10):
-            result = env.step(PromptOptAction(message=f"Client {client_id}, step {i}"))
-        return client_id, result.observation.message_length
-
-# Run 4 episodes concurrently
-with ThreadPoolExecutor(max_workers=4) as executor:
-    results = list(executor.map(run_episode, range(4)))
-```
-
-## Development & Testing
-
-### Direct Environment Testing
-
-Test the environment logic directly without starting the HTTP server:
+## Running Tests
 
 ```bash
-# From the server directory
-python3 server/prompt_opt_env_environment.py
+cd prompt_opt_env
+pip install -e ".[dev]"
+python -m pytest tests/ -v
 ```
 
-This verifies that:
-- Environment resets correctly
-- Step executes actions properly
-- State tracking works
-- Rewards are calculated correctly
+---
 
-### Running Locally
-
-Run the server locally for development:
+## Deployment
 
 ```bash
-uvicorn server.app:app --reload
+huggingface-cli login
+cd prompt_opt_env
+openenv push --repo-id {username}/prompt-opt-env
+
+# Set in HF Spaces → Settings → Repository secrets:
+#   API_BASE_URL, MODEL_NAME, HF_TOKEN
 ```
+
+---
 
 ## Project Structure
 
 ```
-prompt_opt_env/
-├── .dockerignore         # Docker build exclusions
-├── __init__.py            # Module exports
-├── README.md              # This file
-├── openenv.yaml           # OpenEnv manifest
-├── pyproject.toml         # Project metadata and dependencies
-├── uv.lock                # Locked dependencies (generated)
-├── client.py              # PromptOptEnv client
-├── models.py              # Action and Observation models
-└── server/
-    ├── __init__.py        # Server module exports
-    ├── prompt_opt_env_environment.py  # Core environment logic
-    ├── app.py             # FastAPI application (HTTP + WebSocket endpoints)
-    └── Dockerfile         # Container image definition
+prompt-opt-env/
+├── inference.py                      # Mandatory baseline script
+├── .env.example
+└── prompt_opt_env/
+    ├── __init__.py                   # Exports: PromptAction, PromptObservation, PromptOptEnvEnv
+    ├── models.py                     # Pydantic models (all token fields)
+    ├── client.py                     # PromptOptEnvEnv WebSocket client
+    ├── openenv.yaml                  # OpenEnv manifest
+    ├── pyproject.toml                # Dependencies
+    └── server/
+        ├── app.py                    # FastAPI app
+        ├── prompt_opt_env_environment.py  # Core RL logic
+        ├── actions.py                # 5 edit functions + count_tokens()
+        ├── grader.py                 # ROUGE + OpenAI client
+        ├── task_bank.py              # 15 tasks with token_budget
+        └── Dockerfile
 ```
+
+---
+
+## Round 2 Roadmap (Bangalore, April 25–26)
+
+- Exact BPE token counting via tiktoken (replaces word-split)
+- Adaptive alpha: cost penalty increases as tokens_remaining decreases
+- LLM-as-judge grader replacing ROUGE-L
+- Multi-objective Pareto front tracking (quality vs. cost per task category)
+- ADD_COT action with explicit high token cost (+15 tokens)
+- Multi-task episode: 3 tasks, shared total token budget across all 3
+
+---
+
+## Author
+
+Shyam — B.Tech Data Science, Annamacharya University, Rajampet, Andhra Pradesh, India
+Solo submission — Meta x Scaler OpenEnv Hackathon 2026
+
+---
+
+## License
+
+BSD-3-Clause (same as OpenEnv)

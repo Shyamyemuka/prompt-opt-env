@@ -8,16 +8,16 @@ except Exception as e:  # pragma: no cover
 
 try:
     from ..models import PromptAction, PromptObservation
-    from .prompt_opt_env_environment import PromptRLEnvironment
-except ModuleNotFoundError:
+    from .prompt_opt_env_environment import PromptOptEnvEnvironment
+except (ModuleNotFoundError, ImportError):
     from models import PromptAction, PromptObservation
-    from server.prompt_opt_env_environment import PromptRLEnvironment
+    from server.prompt_opt_env_environment import PromptOptEnvEnvironment
 
 app = create_app(
-    PromptRLEnvironment,
+    PromptOptEnvEnvironment,
     PromptAction,
     PromptObservation,
-    env_name="prompt_rl",
+    env_name="prompt_opt_env",
     max_concurrent_envs=1,
 )
 

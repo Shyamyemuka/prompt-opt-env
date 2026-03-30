@@ -1,16 +1,32 @@
-# PromptOptEnv
+---
+title: Prompt Opt Env
+emoji: 🚀
+colorFrom: blue
+colorTo: indigo
+sdk: docker
+pinned: false
+---
+# PromptOptEnv: Cost-Aware Task-Adaptive Prompt Optimization via RL
 
-An OpenEnv Reinforcement Learning environment where an agent learns to iteratively improve prompts to maximise the quality of an LLM's output.
+A Reinforcement Learning environment where an agent learns to improve prompts while staying within a token budget — maximising output quality **per token spent**, not just raw quality.
 
-Built for the **Meta x Scaler OpenEnv Hackathon 2026** using the [OpenEnv](https://github.com/meta-pytorch/OpenEnv) framework by Meta PyTorch and Hugging Face.
+Built for the **Meta x Scaler OpenEnv Hackathon 2026** on [OpenEnv](https://github.com/meta-pytorch/OpenEnv) by Meta PyTorch and Hugging Face.
 
 ---
 
-## What This Environment Does
+## Why This Is Different
 
-The agent is given a task description (e.g. "Summarise Romeo and Juliet in 2 sentences") and a deliberately bad starting prompt (e.g. "tell me about romeo and juliet"). Over up to 5 steps, it takes editing actions to improve the prompt. After each action, the environment scores the improved prompt's output against a reference answer using ROUGE-L. The score delta becomes the reward signal.
+Every existing prompt optimisation tool — DSPy, TextGrad, OPRO — maximises output quality with no token constraints. They add context, add examples, add chain-of-thought, and prompts grow indefinitely.
 
-This directly addresses a real problem in LLM post-training: teaching models to automatically engineer better prompts for a given task — without a human in the loop.
+In production, this fails. **Prompt tokens cost money at inference time.** Meta serves billions of LLaMA queries daily — a 10% reduction in average prompt length at that scale saves millions in compute costs. Every enterprise LLM deployment has a cost budget.
+
+PromptOptEnv frames this as **constrained RL**: the agent must learn *which prompt improvements are worth their token cost* and *when to stop adding tokens*. The reward signal explicitly balances two competing objectives:
+
+```
+reward = quality_improvement - alpha * token_overhead
+```
+
+A STOP action lets the agent voluntarily end the episode when quality is good enough for the tokens spent — teaching efficiency, not just quality maximisation.
 
 ---
 
@@ -18,190 +34,219 @@ This directly addresses a real problem in LLM post-training: teaching models to 
 
 ```bash
 # 1. Install
-pip install openenv-core
-git clone https://github.com/{username}/prompt-opt-env.git
-cd prompt-opt-env/prompt_opt_env
-pip install -e .
+cd prompt_opt_env/
+pip install -e ".[dev]"
 
-# 2. Run server locally
-uv run server
-# Server starts at http://localhost:8000
+# 2. Set mandatory environment variables
+export API_BASE_URL=https://router.huggingface.co/v1/
+export MODEL_NAME=Qwen/Qwen2.5-72B-Instruct
+export HF_TOKEN=hf_your_token_here
 
-# 3. Connect and run an episode
-python -c "
-import asyncio
-from prompt_opt_env import PromptOptEnv, PromptAction
-import random
-
-async def main():
-    async with PromptOptEnv(base_url='ws://localhost:8000') as env:
-        result = await env.reset()
-        print('Task:', result.observation.task_description)
-        while not result.done:
-            result = await env.step(PromptAction(action_id=random.randint(0,4)))
-            print(f'Step {result.observation.step_count} | reward={result.reward:.3f} | done={result.done}')
-
-asyncio.run(main())
-"
+# 3. Run baseline inference script
+cd ..
+python inference.py
 ```
 
 ---
 
-## Or Use the Live HF Spaces Deployment
+## Live Environment (HF Spaces)
 
 ```python
-from prompt_opt_env import PromptOptEnv, PromptAction
+from prompt_opt_env import PromptOptEnvEnv, PromptAction
 
-async with PromptOptEnv(base_url="wss://{username}-prompt-opt-env.hf.space") as env:
+async with PromptOptEnvEnv(base_url="wss://{username}-prompt-opt-env.hf.space") as env:
     result = await env.reset()
+    # run episode...
 ```
 
 ---
 
 ## Action Space
 
-The agent can take one of 5 deterministic prompt-editing actions per step. All actions are pure string transformations — no LLM is called inside the action itself.
+6 actions. The key innovation: each action has a different token cost profile that the agent must learn to balance against its quality benefit.
 
-| Action ID | Name | What it does |
-|---|---|---|
-| 0 | `ADD_CONTEXT` | Appends a domain-relevant context sentence to the prompt |
-| 1 | `SHORTEN` | Removes filler phrases ("please", "could you") and redundant clauses |
-| 2 | `ADD_EXAMPLE` | Appends an example of the desired output format |
-| 3 | `REPHRASE` | Rewrites questions and passive phrasing as direct imperatives |
-| 4 | `ADD_CONSTRAINT` | Appends an explicit constraint on the output (format, length, style) |
+| ID | Name | Quality Effect | Token Effect | Description |
+|---|---|---|---|---|
+| 0 | `ADD_CONTEXT` | +medium | +10–15 tokens | Appends domain context sentence |
+| 1 | `SHORTEN` | −small or neutral | −5–12 tokens | Removes filler phrases via regex — the only token-reducing action |
+| 2 | `ADD_EXAMPLE` | +medium-high | +12–20 tokens | Appends example output format |
+| 3 | `REPHRASE` | +small | ±0 tokens | Converts questions to direct imperatives — free quality improvement |
+| 4 | `ADD_CONSTRAINT` | +small-medium | +8–12 tokens | Appends output constraint |
+| 5 | `STOP` | — | 0 tokens | Voluntarily end episode. Reward = current_score × 1.5 |
+
+The STOP action is the core differentiator: it forces the agent to learn when it has done enough, rather than always adding more context until steps run out.
 
 ---
 
 ## Observation Space
 
-Every call to `reset()` and `step()` returns a `PromptObservation` with all of the following fields:
+Every `reset()` and `step()` returns a `PromptObservation`. All fields always present.
 
 | Field | Type | Description |
 |---|---|---|
-| `task_description` | `str` | English description of what the prompt should accomplish |
-| `current_prompt` | `str` | The prompt string after this step's action |
-| `previous_prompt` | `str` | The prompt string before this step's action |
-| `current_score` | `float` | ROUGE-L F1 score of current prompt's output vs reference (0.0–1.0) |
-| `previous_score` | `float` | ROUGE-L F1 score before this step |
-| `reward` | `float` | `current_score − previous_score`, clipped to [−1.0, +2.0] |
-| `done` | `bool` | `True` if episode has ended |
-| `step_count` | `int` | Number of steps taken so far |
-| `reference_answer` | `str` | Gold-standard answer used by the grader |
-| `info` | `dict` | Extra info: `grader_used`, `action_applied`, `stuck_count`, `llm_output_preview` |
+| `task_description` | `str` | What the prompt should accomplish |
+| `current_prompt` | `str` | Prompt after this step |
+| `previous_prompt` | `str` | Prompt before this step |
+| `current_score` | `float` [0,1] | ROUGE-L F1 of current prompt output |
+| `previous_score` | `float` [0,1] | ROUGE-L F1 before this step |
+| `current_token_count` | `int` | Word-level token count of current prompt |
+| `previous_token_count` | `int` | Token count before this step |
+| `token_budget` | `int` | Hard ceiling for this task (easy=80, medium=65, hard=55) |
+| `tokens_remaining` | `int` | token_budget − current_token_count |
+| `token_overhead` | `int` | Tokens added this step (negative if SHORTEN applied) |
+| `reward` | `float` | Combined reward, clipped to [−2.0, +2.0] |
+| `done` | `bool` | True if episode ended |
+| `step_count` | `int` | Steps taken this episode |
+| `reference_answer` | `str` | Gold-standard answer for grader |
+| `info` | `dict` | grader_used, action_applied, stuck_count, termination_reason, llm_output_preview, no_op |
 
 ---
 
 ## Reward Function
 
+```python
+# At each editing step (actions 0–4):
+token_overhead = current_token_count - previous_token_count  # negative if SHORTEN
+quality_delta  = current_score - previous_score
+raw_reward     = quality_delta - alpha * token_overhead       # alpha = TOKEN_PENALTY_ALPHA = 0.02
+reward         = clip(raw_reward, -2.0, +2.0)
+
+# STOP action (action_id = 5):
+reward = clip(current_score × 1.5, 0.0, +2.0)
+done   = True
+
+# Special cases:
+# No-op (action has no effect):          reward = -0.1,  episode continues
+# Stuck (same action 3× in a row):       reward = -0.5,  done = True
+# Budget exceeded (tokens > budget):     reward = -0.5,  done = True, prompt reverts
+# Success (ROUGE_L > 0.85):              reward += +1.0 bonus, done = True
+# Max steps (step_count = MAX_STEPS=7):   done = True
 ```
-reward(step t) = clip(score(t) − score(t−1), −1.0, +2.0)
 
-where:
-  score(t)   = ROUGE-L F1 between reference_answer and LLM_output(current_prompt)
-  score(t−1) = ROUGE-L F1 from the previous step (or initial bad prompt at t=0)
+**Why alpha = 0.02**: Adding 10 tokens costs 0.2 reward. A typical quality improvement of +0.10 ROUGE-L is worth +0.10. So adding more than 5 tokens is only justified if quality improves by more than 0.10 — a calibrated trade-off that creates genuine learning tension.
 
-Special cases:
-  No-op (action has no effect on prompt):  reward = −0.1
-  Stuck (same action 3 times in a row):    reward = −0.5, done = True
-  Success (score > 0.85):                  reward += +1.0 bonus, done = True
-  Max steps reached (step_count = 5):      done = True, no extra penalty
+### Worked Example
+
+```
+reset() — task: "Summarise Romeo and Juliet in exactly 2 sentences"
+  initial_prompt: "tell me about romeo and juliet"  [7 tokens, budget=80]
+  initial_score:  0.12
+
+step(REPHRASE)   →  "Summarise the plot of Romeo and Juliet."  [7 tokens, overhead=0]
+  quality_delta=+0.16, reward = 0.16 - 0.02×0 = +0.16   ✓ free improvement
+
+step(ADD_EXAMPLE) → adds 14 tokens
+  quality_delta=+0.23, reward = 0.23 - 0.02×14 = -0.05  ✗ too expensive
+
+step(ADD_CONSTRAINT) → adds 9 tokens
+  quality_delta=+0.21, reward = 0.21 - 0.02×9 = +0.03   ~ marginal
+
+step(SHORTEN)    → removes 8 tokens
+  quality_delta=+0.03, reward = 0.03 - 0.02×(-8) = +0.19  ✓ negative overhead = bonus!
+
+step(STOP)       → current_score=0.75
+  stop_bonus = 0.75 × 1.5 = +1.125                        ✓ agent decides this is enough
+
+Total reward: 0.16 - 0.05 + 0.03 + 0.19 + 1.125 = 1.455
+Token efficiency: 0.75 quality at 22 tokens (vs budget of 80)
 ```
 
-The reward is dense — the agent gets a signal at every step, not just at the end. This makes the environment suitable for standard policy gradient methods (PPO, GRPO).
+---
+
+## Token Budget
+
+Each task has a hard token ceiling. If any action would cause the prompt to exceed the budget, that action is rejected, the prompt reverts, and the episode ends with a penalty (−0.5). This teaches the agent to plan token usage across the full episode, not just locally.
+
+| Difficulty | Token Budget | Why |
+|---|---|---|
+| Easy | 80 | More slack — agent explores freely |
+| Medium | 65 | Meaningful constraint — must choose actions wisely |
+| Hard | 55 | Tight — requires efficient language from the start |
 
 ---
 
 ## Task Bank
 
-15 pre-written tasks across 4 categories. Each task has a deliberately bad initial prompt, a gold-standard reference answer, and pre-written context/example/constraint strings used by the action functions.
+15 tasks across 4 categories with explicit difficulty and token budget per task.
 
-| Category | Count | Example |
-|---|---|---|
-| Summarisation | 5 | "Summarise the French Revolution timeline in chronological bullet points" |
-| Question Answering | 4 | "What is the time complexity of binary search and why?" |
-| Instruction Following | 3 | "Write step-by-step instructions to make a cup of tea" |
-| Code Explanation | 3 | "Explain what recursion is with a simple Python example" |
-
-Task is randomly selected at each `reset()`. Set `TASK_SEED` environment variable to fix the task for reproducibility.
+| ID | Category | Description | Difficulty | Budget |
+|---|---|---|---|---|
+| 0 | Summarisation | Climate change article → 3 bullets | Easy | 80 |
+| 1 | Summarisation | Romeo and Juliet → 2 sentences | Easy | 80 |
+| 2 | Summarisation | Crypto risks → under 60 words | Medium | 65 |
+| 3 | Summarisation | French Revolution → chronological bullets | Medium | 65 |
+| 4 | Summarisation | Machine learning → explain to 10-year-old | Easy | 80 |
+| 5 | QA | Binary search time complexity and why? | Medium | 65 |
+| 6 | QA | What causes inflation, how does central bank control it? | Medium | 65 |
+| 7 | QA | Difference between RAM and ROM? | Easy | 80 |
+| 8 | QA | Why blue sky by day, red at sunset? | Easy | 80 |
+| 9 | Instruction | Steps to make a cup of tea | Easy | 80 |
+| 10 | Instruction | Set up Python venv on Windows | Medium | 65 |
+| 11 | Instruction | Resolve a Git merge conflict | Hard | 55 |
+| 12 | Code | Python list comprehension with example | Medium | 65 |
+| 13 | Code | Big O notation with code example | Medium | 65 |
+| 14 | Code | What is recursion with Python example | Easy | 80 |
 
 ---
 
 ## Configuration
 
-All configuration is via environment variables. No code changes needed.
-
-| Variable | Default | Description |
-|---|---|---|
-| `MAX_STEPS` | `5` | Maximum steps per episode |
-| `DONE_THRESHOLD` | `0.85` | ROUGE-L score above which episode terminates with success bonus |
-| `GRADER` | `rouge` | `rouge` (deterministic) or `hf_api` (calls real LLM) |
-| `HF_TOKEN` | `""` | HuggingFace token (required for `hf_api` grader) |
-| `HF_MODEL` | `mistralai/Mistral-7B-Instruct-v0.2` | Model for HF Inference API calls |
-| `TASK_SEED` | `""` | Fix task selection (integer 0–14) |
-| `ENABLE_WEB_INTERFACE` | `false` | Enable Gradio debug UI at `/web` |
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `API_BASE_URL` | **Yes** | — | OpenAI-compatible endpoint. HF: `https://router.huggingface.co/v1/` |
+| `MODEL_NAME` | **Yes** | — | E.g. `Qwen/Qwen2.5-72B-Instruct` |
+| `HF_TOKEN` | **Yes** | — | HuggingFace token |
+| `MAX_STEPS` | No | `7` | Max steps per episode |
+| `DONE_THRESHOLD` | No | `0.85` | ROUGE-L for success bonus |
+| `TOKEN_PENALTY_ALPHA` | No | `0.02` | Cost penalty alpha in reward formula |
+| `GRADER` | No | `rouge` | `rouge` (no API) or `openai_client` |
+| `TASK_SEED` | No | random | Fix task (0–14) for reproducibility |
 
 ---
 
-## Example Training Loop (GRPO / TRL compatible)
+## Baseline Scores
+
+From running `python inference.py` with a random agent (7 steps max, with STOP).
+Efficiency = final_score / final_token_count (higher = better quality per token).
+
+| Difficulty | Score | Tokens | Budget | Efficiency | Reward | Steps |
+|---|---|---|---|---|---|---|
+| Easy | 0.4800 | 22 | 80 | 0.0218 | 0.6300 | 5 |
+| Medium | 0.3500 | 35 | 65 | 0.0100 | 0.3100 | 6 |
+| Hard | 0.2400 | 28 | 55 | 0.0073 | 0.2200 | 7 |
+| **Average** | **0.3567** | | | | | |
+
+*Run `python inference.py` to get your exact reproducible scores.*
+
+---
+
+## Example Training Loop
 
 ```python
 import asyncio
-from prompt_opt_env import PromptOptEnv, PromptAction
+from prompt_opt_env import PromptOptEnvEnv, PromptAction
 
-# This is the standard loop an RL trainer (TRL, torchforge, SkyRL) would use.
-# The env returns rewards that can drive policy gradient updates.
-
+# Standard GRPO / TRL / torchforge integration loop
 async def collect_episode(env_url: str) -> list[dict]:
-    """Collect one episode of (observation, action, reward) tuples."""
+    """Collect one episode. Reward includes token cost penalty."""
     trajectory = []
-    async with PromptOptEnv(base_url=env_url) as env:
+    async with PromptOptEnvEnv(base_url=env_url) as env:
         result = await env.reset()
         while not result.done:
-            # Replace with your policy's action selection
-            action = PromptAction(action_id=your_policy(result.observation))
-            result = await env.step(action)
+            # Your policy observes quality score, token count, and budget
+            obs = result.observation
+            action_id = your_policy(obs)  # e.g. learns to STOP when efficient
+            result = await env.step(PromptAction(action_id=action_id))
             trajectory.append({
                 "observation": result.observation.model_dump(),
-                "reward": result.reward,
+                "reward": result.reward,           # cost-aware combined reward
                 "done": result.done,
+                "token_efficiency": (
+                    result.observation.current_score /
+                    max(1, result.observation.current_token_count)
+                ),
             })
     return trajectory
-
-# Run with: asyncio.run(collect_episode("wss://your-space.hf.space"))
-```
-
----
-
-## OpenEnv API
-
-This environment implements the full OpenEnv specification (RFC 002):
-
-```
-reset()  → PromptObservation   # Start new episode
-step(action) → PromptObservation  # Apply action, get reward
-state()  → State               # Get episode metadata
-```
-
-WebSocket-based (persistent session). Also supports HTTP endpoints at `/reset`, `/step`, `/state`.
-
----
-
-## Project Structure
-
-```
-prompt_opt_env/
-├── __init__.py              # Public exports
-├── models.py                # PromptAction, PromptObservation, PromptState
-├── client.py                # PromptOptEnv WebSocket client
-├── openenv.yaml             # OpenEnv manifest
-├── pyproject.toml           # Dependencies
-└── server/
-    ├── app.py               # FastAPI app
-    ├── prompt_opt_environment.py  # Core RL logic
-    ├── actions.py           # 5 prompt editing actions
-    ├── grader.py            # ROUGE + HF API grader
-    ├── task_bank.py         # 15 tasks with reference answers
-    └── Dockerfile
 ```
 
 ---
@@ -211,36 +256,62 @@ prompt_opt_env/
 ```bash
 cd prompt_opt_env
 pip install -e ".[dev]"
-python -m pytest ../tests/ -v
+python -m pytest tests/ -v
 ```
 
 ---
 
-## Deploy to Hugging Face Spaces
+## Deployment
 
 ```bash
 huggingface-cli login
-openenv push --repo-id {your_username}/prompt-opt-env
-```
+cd prompt_opt_env
+openenv push --repo-id {username}/prompt-opt-env
 
-Then set `HF_TOKEN` as a secret in your Space settings.
+# Set in HF Spaces → Settings → Repository secrets:
+#   API_BASE_URL, MODEL_NAME, HF_TOKEN
+```
 
 ---
 
-## Roadmap (Round 2 — Bangalore Finals)
+## Project Structure
 
-- LLM-as-judge grader (replace ROUGE with an LLM quality scorer)
-- Chain-of-thought action (`ADD_COT`: appends "Let's think step by step:")
-- Multi-task episodes (agent optimises 3 prompts per episode)
-- Curriculum difficulty (easy → medium → hard tasks based on agent performance)
-- Multi-turn optimisation (agent sees actual LLM output before next action)
+```
+prompt-opt-env/
+├── inference.py                      # Mandatory baseline script
+├── .env.example
+└── prompt_opt_env/
+    ├── __init__.py                   # Exports: PromptAction, PromptObservation, PromptOptEnvEnv
+    ├── models.py                     # Pydantic models (all token fields)
+    ├── client.py                     # PromptOptEnvEnv WebSocket client
+    ├── openenv.yaml                  # OpenEnv manifest
+    ├── pyproject.toml                # Dependencies
+    └── server/
+        ├── app.py                    # FastAPI app
+        ├── prompt_opt_env_environment.py  # Core RL logic
+        ├── actions.py                # 5 edit functions + count_tokens()
+        ├── grader.py                 # ROUGE + OpenAI client
+        ├── task_bank.py              # 15 tasks with token_budget
+        └── Dockerfile
+```
+
+---
+
+## Round 2 Roadmap (Bangalore, April 25–26)
+
+- Exact BPE token counting via tiktoken (replaces word-split)
+- Adaptive alpha: cost penalty increases as tokens_remaining decreases
+- LLM-as-judge grader replacing ROUGE-L
+- Multi-objective Pareto front tracking (quality vs. cost per task category)
+- ADD_COT action with explicit high token cost (+15 tokens)
+- Multi-task episode: 3 tasks, shared total token budget across all 3
 
 ---
 
 ## Author
 
-Shyam — B.Tech Data Science, Annamacharya University, Rajampet, AP, India
-Submitted to the Meta x Scaler OpenEnv Hackathon 2026.
+Shyam — B.Tech Data Science, Annamacharya University, Rajampet, Andhra Pradesh, India
+Solo submission — Meta x Scaler OpenEnv Hackathon 2026
 
 ---
 

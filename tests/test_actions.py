@@ -1,4 +1,4 @@
-"""Unit tests for all 5 prompt-editing action functions."""
+"""Unit tests for all 5 prompt-editing action functions + token counting."""
 
 import pytest
 
@@ -9,10 +9,18 @@ from prompt_opt_env.server.actions import (
     rephrase,
     shorten,
     apply_action,
+    count_tokens,
     ACTION_NAMES,
 )
 from prompt_opt_env.server.task_bank import TASK_BANK
 
+
+# ─── count_tokens ──────────────────────────────────────────────────────────────
+
+def test_count_tokens():
+    assert count_tokens("one two three") == 3
+    assert count_tokens("  hello   world  ") == 2
+    assert count_tokens("") == 0
 
 # ─── add_context ───────────────────────────────────────────────────────────────
 
@@ -89,7 +97,7 @@ def test_add_constraint_no_duplicate():
 
 # ─── apply_action dispatcher ───────────────────────────────────────────────────
 
-def test_apply_action_dispatcher_all_five():
+def test_apply_action_dispatcher_0_to_4():
     task = TASK_BANK[0]
     for action_id in range(5):
         result = apply_action(action_id, "simple prompt", task)
@@ -98,11 +106,13 @@ def test_apply_action_dispatcher_all_five():
 
 
 def test_apply_action_invalid_raises():
+    with pytest.raises(ValueError, match="Invalid action_id=5"):
+        apply_action(5, "prompt", TASK_BANK[0])
     with pytest.raises(ValueError, match="Invalid action_id=99"):
         apply_action(99, "prompt", TASK_BANK[0])
 
 
 def test_action_names_complete():
-    assert set(ACTION_NAMES.keys()) == {0, 1, 2, 3, 4}
+    assert set(ACTION_NAMES.keys()) == {0, 1, 2, 3, 4, 5}
     assert ACTION_NAMES[0] == "ADD_CONTEXT"
-    assert ACTION_NAMES[4] == "ADD_CONSTRAINT"
+    assert ACTION_NAMES[5] == "STOP"
