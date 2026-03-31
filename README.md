@@ -32,6 +32,30 @@ A STOP action lets the agent voluntarily end the episode when quality is good en
 
 ## Quick Start
 
+### Option 1: Interactive Prompt Optimizer (Recommended for Users)
+
+```bash
+# 1. Install dependencies
+pip install openai rouge-score
+
+# 2. Set your HuggingFace token
+export HF_TOKEN=hf_your_token_here
+
+# 3. Run interactive optimizer
+python optimize.py
+
+# Or see demo examples
+python demo_examples.py
+```
+
+**Interactive mode lets you:**
+- Enter your own prompts
+- See before/after comparison with metrics
+- View token cost analysis
+- Save results to file
+
+### Option 2: Baseline Inference Script
+
 ```bash
 # 1. Install
 cd prompt_opt_env/

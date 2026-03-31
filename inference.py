@@ -26,10 +26,18 @@ from openai import OpenAI
 from rouge_score import rouge_scorer
 
 # ── Mandatory env vars ────────────────────────────────────────────────────────
-API_BASE_URL: str = os.environ["API_BASE_URL"]
-MODEL_NAME: str   = os.environ["MODEL_NAME"]
-HF_TOKEN: str     = os.environ["HF_TOKEN"]
+API_BASE_URL: str = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1/")
+MODEL_NAME: str   = os.getenv("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
+HF_TOKEN: str     = os.getenv("HF_TOKEN", "")
 ALPHA: float      = float(os.getenv("TOKEN_PENALTY_ALPHA", "0.02"))
+
+if not HF_TOKEN:
+    print("ERROR: HF_TOKEN environment variable not found!")
+    print("Please set your HuggingFace token before running. Examples:")
+    print('  PowerShell: $env:HF_TOKEN="hf_your_token"')
+    print('  Mac/Linux : export HF_TOKEN="hf_your_token"')
+    print('Or load it from your .env.local file: uv run --env-file .env.local inference.py')
+    sys.exit(1)
 
 _CLIENT = OpenAI(base_url=API_BASE_URL, api_key=HF_TOKEN)
 _ROUGE  = rouge_scorer.RougeScorer(["rougeL"], use_stemmer=True)

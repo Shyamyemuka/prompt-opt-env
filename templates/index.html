@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PromptOptEnv - RL Prompt Optimizer</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 40px 20px;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+        }
+        h1 {
+            color: white;
+            text-align: center;
+            margin-bottom: 10px;
+            font-size: 2.5em;
+        }
+        .subtitle {
+            color: rgba(255,255,255,0.8);
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .card {
+            background: white;
+            border-radius: 16px;
+            padding: 30px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+        }
+        .form-group {
+            margin-bottom: 20px;
+        }
+        label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 600;
+            color: #333;
+        }
+        textarea, input[type="text"], select {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            font-size: 16px;
+            transition: border-color 0.3s;
+            background: white;
+        }
+        textarea:focus, input[type="text"]:focus, select:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        textarea { min-height: 100px; resize: vertical; }
+        .hint {
+            font-size: 13px;
+            color: #666;
+            margin-top: 5px;
+        }
+        button {
+            width: 100%;
+            padding: 15px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 18px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 20px rgba(102, 126, 234, 0.4);
+        }
+        .optional-fields {
+            margin-top: 20px;
+            padding-top: 20px;
+            border-top: 1px solid #eee;
+        }
+        .optional-title {
+            color: #666;
+            font-size: 14px;
+            margin-bottom: 15px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .hidden {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>PromptOptEnv</h1>
+        <p class="subtitle">RL-Powered Prompt Optimization with Cost Awareness</p>
+
+        <div class="card">
+            <form action="/optimize" method="post">
+                <div class="form-group">
+                    <label for="task">Select Task</label>
+                    <select name="task" id="task">
+                        <option value="Summarization">Summarization</option>
+                        <option value="Question Answering">Question Answering</option>
+                        <option value="Paraphrasing">Paraphrasing</option>
+                        <option value="Instruction Following">Instruction Following</option>
+                    </select>
+                </div>
+
+                <div class="form-group" id="generic-input-group">
+                    <label for="input_text" id="generic-input-label">Input Text</label>
+                    <textarea name="input_text" id="input_text" placeholder="Paste the paragraph you want to summarize..."></textarea>
+                </div>
+
+                <div id="qa-input-group" class="hidden">
+                    <div class="form-group">
+                        <label for="context">Context</label>
+                        <textarea name="context" id="context" placeholder="Enter context passage..."></textarea>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="question">Question</label>
+                        <textarea name="question" id="question" placeholder="Enter your question..."></textarea>
+                    </div>
+                </div>
+
+                <div class="optional-fields">
+                    <p class="optional-title">Optional Configuration</p>
+
+                    <div class="form-group">
+                        <label for="user_prompt">Initial Prompt (Optional)</label>
+                        <textarea
+                            name="user_prompt"
+                            id="user_prompt"
+                            placeholder="e.g., Summarize the following text clearly and concisely"
+                        ></textarea>
+                        <p class="hint">Leave blank to use a task-specific default prompt</p>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="goal">Optimization Goal</label>
+                        <select name="goal" id="goal">
+                            <option value="Balanced" selected>Balanced</option>
+                            <option value="High Quality">High Quality</option>
+                            <option value="Low Cost">Low Cost</option>
+                        </select>
+                    </div>
+                </div>
+
+                <button type="submit">Optimize Prompt</button>
+            </form>
+        </div>
+    </div>
+    <script>
+        const taskField = document.getElementById("task");
+        const genericInputGroup = document.getElementById("generic-input-group");
+        const genericInputLabel = document.getElementById("generic-input-label");
+        const genericInput = document.getElementById("input_text");
+        const qaInputGroup = document.getElementById("qa-input-group");
+
+        const inputConfig = {
+            "Summarization": {
+                label: "Input Text",
+                placeholder: "Paste the paragraph you want to summarize..."
+            },
+            "Paraphrasing": {
+                label: "Sentence",
+                placeholder: "Enter a sentence to paraphrase..."
+            },
+            "Instruction Following": {
+                label: "Instruction",
+                placeholder: "e.g., Explain photosynthesis in simple terms"
+            }
+        };
+
+        function updateTaskInputs() {
+            const selectedTask = taskField.value;
+
+            if (selectedTask === "Question Answering") {
+                genericInputGroup.classList.add("hidden");
+                qaInputGroup.classList.remove("hidden");
+                return;
+            }
+
+            qaInputGroup.classList.add("hidden");
+            genericInputGroup.classList.remove("hidden");
+            const config = inputConfig[selectedTask];
+            genericInputLabel.textContent = config.label;
+            genericInput.placeholder = config.placeholder;
+        }
+
+        taskField.addEventListener("change", updateTaskInputs);
+        updateTaskInputs();
+    </script>
+</body>
+</html>
