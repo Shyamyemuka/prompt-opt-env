@@ -4,10 +4,26 @@ Web front-end for PromptOptEnv - Interactive Prompt Optimizer
 Run:
     python web_app.py
 
-Then open browser to http://localhost:5000
+The server starts automatically, loads .env.local, and opens your browser.
 """
 import os
 import sys
+import threading
+import webbrowser
+
+# ── Resolve project root relative to this file ────────────────────────────────
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, BASE_DIR)
+
+# ── Auto-load .env.local (HF_TOKEN, MODEL_NAME, etc.) ────────────────────────
+try:
+    from dotenv import load_dotenv
+    _env_file = os.path.join(BASE_DIR, ".env.local")
+    if os.path.exists(_env_file):
+        load_dotenv(_env_file, override=True)
+        print(f"[INFO] Loaded environment from {_env_file}")
+except ImportError:
+    pass  # python-dotenv not installed; fall back to shell env
 
 from fastapi import FastAPI, Form, Request
 from fastapi.responses import HTMLResponse
@@ -16,7 +32,6 @@ from fastapi.templating import Jinja2Templates
 import uvicorn
 
 # Import optimizer components
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from prompt_opt_env.server.actions import (
     count_tokens, ACTION_NAMES,
     add_context, shorten, add_example, rephrase, add_constraint
@@ -24,15 +39,14 @@ from prompt_opt_env.server.actions import (
 from openai import OpenAI
 from rouge_score import rouge_scorer
 
-# Environment setup
+# ── Environment variables (loaded from .env.local above) ─────────────────────
 API_BASE_URL: str = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1/")
 MODEL_NAME: str = os.getenv("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
 HF_TOKEN: str = os.getenv("HF_TOKEN", "")
 ALPHA: float = float(os.getenv("TOKEN_PENALTY_ALPHA", "0.02"))
 
 if not HF_TOKEN:
-    print("[WARNING] HF_TOKEN not set. Please set your HuggingFace token.")
-    print("          export HF_TOKEN=hf_your_token_here")
+    print("[WARNING] HF_TOKEN not set. Add it to .env.local as HF_TOKEN=hf_...")
 
 _CLIENT = None
 _ROUGE = rouge_scorer.RougeScorer(["rougeL"], use_stemmer=True)
@@ -216,9 +230,19 @@ def optimize_prompt(initial_prompt: str, context: str = "", reference: str = "",
     return optimize_prompt_with_state(state)
 
 
+# ── Ensure templates directory and HTML files exist ──────────────────────────
+def _write_templates():
+    """Write HTML templates to disk (always, so they stay in sync)."""
+    tpl_dir = os.path.join(BASE_DIR, "templates")
+    os.makedirs(tpl_dir, exist_ok=True)
+    _write_index_html(tpl_dir)
+    _write_results_html(tpl_dir)
+
+
 # Create FastAPI app
+TPL_DIR = os.path.join(BASE_DIR, "templates")
 app = FastAPI(title="PromptOptEnv Web")
-templates = Jinja2Templates(directory="templates")
+templates = Jinja2Templates(directory=TPL_DIR)
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -277,11 +301,8 @@ async def optimize(
     })
 
 
-if __name__ == "__main__":
-    # Create templates directory and HTML files
-    os.makedirs("templates", exist_ok=True)
-
-    # Create index.html
+def _write_index_html(tpl_dir: str):
+    """Write index.html into tpl_dir."""
     index_html = '''<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -483,7 +504,12 @@ if __name__ == "__main__":
 </body>
 </html>'''
 
-    # Create results.html
+    with open(os.path.join(tpl_dir, "index.html"), "w", encoding="utf-8") as f:
+        f.write(index_html)
+
+
+def _write_results_html(tpl_dir: str):
+    """Write results.html into tpl_dir."""
     results_html = '''<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -498,126 +524,48 @@ if __name__ == "__main__":
             min-height: 100vh;
             padding: 40px 20px;
         }
-        .container {
-            max-width: 900px;
-            margin: 0 auto;
-        }
-        h1 {
-            color: white;
-            text-align: center;
-            margin-bottom: 30px;
-            font-size: 2em;
-        }
+        .container { max-width: 900px; margin: 0 auto; }
+        h1 { color: white; text-align: center; margin-bottom: 30px; font-size: 2em; }
         .card {
-            background: white;
-            border-radius: 16px;
-            padding: 30px;
-            margin-bottom: 25px;
-            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+            background: white; border-radius: 16px; padding: 30px;
+            margin-bottom: 25px; box-shadow: 0 10px 40px rgba(0,0,0,0.2);
         }
         .section-title {
-            color: #667eea;
-            font-size: 18px;
-            font-weight: 700;
-            margin-bottom: 15px;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-            border-bottom: 2px solid #667eea;
-            padding-bottom: 10px;
-        }
-        .comparison {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 30px;
-        }
-        .side {
-            padding: 20px;
-            border-radius: 12px;
-        }
-        .initial { background: #f5f5f5; }
-        .final { background: #e8f5e9; }
-        .side-label {
-            font-weight: 700;
-            margin-bottom: 10px;
-            color: #333;
+            color: #667eea; font-size: 18px; font-weight: 700; margin-bottom: 15px;
+            text-transform: uppercase; letter-spacing: 0.5px;
+            border-bottom: 2px solid #667eea; padding-bottom: 10px;
         }
         .prompt-box {
-            background: white;
-            padding: 15px;
-            border-radius: 8px;
-            border-left: 4px solid #667eea;
-            margin-bottom: 15px;
-            font-family: monospace;
-            font-size: 14px;
+            background: #f8f8f8; padding: 15px; border-radius: 8px;
+            border-left: 4px solid #667eea; margin-bottom: 15px;
+            font-family: monospace; font-size: 14px; white-space: pre-wrap;
         }
         .output-box {
-            background: white;
-            padding: 15px;
-            border-radius: 8px;
-            border: 1px solid #ddd;
-            min-height: 80px;
-            color: #555;
+            background: #f8f8f8; padding: 15px; border-radius: 8px;
+            border: 1px solid #ddd; min-height: 80px; color: #555;
+            white-space: pre-wrap;
         }
-        .metric {
-            display: inline-block;
-            margin-right: 20px;
-            margin-top: 10px;
-        }
-        .metric-label {
-            font-size: 12px;
-            color: #666;
-            text-transform: uppercase;
-        }
-        .metric-value {
-            font-size: 20px;
-            font-weight: 700;
-            color: #333;
-        }
+        .metric { display: inline-block; margin-right: 20px; margin-top: 10px; }
+        .metric-label { font-size: 12px; color: #666; text-transform: uppercase; }
+        .metric-value { font-size: 20px; font-weight: 700; color: #333; }
         .metrics-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-            gap: 20px;
-            margin-top: 20px;
+            display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 20px; margin-top: 20px;
         }
         .metric-card {
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            padding: 20px;
-            border-radius: 12px;
-            text-align: center;
+            color: white; padding: 20px; border-radius: 12px; text-align: center;
         }
-        .metric-card .value {
-            font-size: 32px;
-            font-weight: 700;
-        }
-        .metric-card .label {
-            font-size: 14px;
-            opacity: 0.9;
-            margin-top: 5px;
-        }
+        .metric-card .value { font-size: 32px; font-weight: 700; }
+        .metric-card .label { font-size: 14px; opacity: 0.9; margin-top: 5px; }
         .back-btn {
-            display: inline-block;
-            margin-top: 20px;
-            padding: 12px 30px;
-            background: white;
-            color: #667eea;
-            text-decoration: none;
-            border-radius: 8px;
-            font-weight: 600;
-            transition: transform 0.2s;
+            display: inline-block; margin-top: 20px; padding: 12px 30px;
+            background: white; color: #667eea; text-decoration: none;
+            border-radius: 8px; font-weight: 600; transition: transform 0.2s;
         }
-        .back-btn:hover {
-            transform: translateY(-2px);
-        }
-        .arrow {
-            text-align: center;
-            font-size: 30px;
-            color: #667eea;
-            margin: 20px 0;
-        }
-        @media (max-width: 768px) {
-            .comparison { grid-template-columns: 1fr; }
-        }
+        .back-btn:hover { transform: translateY(-2px); }
+        .arrow { text-align: center; font-size: 30px; color: #667eea; margin: 20px 0; }
+        @media (max-width: 768px) { .comparison { grid-template-columns: 1fr; } }
     </style>
 </head>
 <body>
@@ -699,16 +647,30 @@ if __name__ == "__main__":
 </body>
 </html>'''
 
-    with open("templates/index.html", "w") as f:
-        f.write(index_html)
-
-    with open("templates/results.html", "w") as f:
+    with open(os.path.join(tpl_dir, "results.html"), "w", encoding="utf-8") as f:
         f.write(results_html)
+
+
+if __name__ == "__main__":
+    PORT = 5000
+    URL = f"http://localhost:{PORT}"
+
+    # Write/refresh templates from embedded HTML
+    _write_templates()
 
     print("=" * 60)
     print("  PromptOptEnv Web Server Starting")
     print("=" * 60)
-    print(f"\n  Open your browser to: http://localhost:5000")
+    print(f"\n  Open your browser to: {URL}")
+    print(f"  Templates written to: {os.path.join(BASE_DIR, 'templates')}")
     print(f"  Press Ctrl+C to stop\n")
 
-    uvicorn.run(app, host="0.0.0.0", port=5000)
+    # Open browser after a short delay so the server has time to start
+    def _open_browser():
+        import time
+        time.sleep(1.5)
+        webbrowser.open(URL)
+
+    threading.Thread(target=_open_browser, daemon=True).start()
+
+    uvicorn.run(app, host="0.0.0.0", port=PORT)

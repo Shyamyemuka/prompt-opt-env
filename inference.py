@@ -25,6 +25,20 @@ import random
 from openai import OpenAI
 from rouge_score import rouge_scorer
 
+# Load .env.local variables explicitly so `python inference.py` works out of the box
+try:
+    env_local = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env.local")
+    if os.path.exists(env_local):
+        with open(env_local, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    k, v = line.split("=", 1)
+                    if k not in os.environ:
+                        os.environ[k] = v.strip("'\"")
+except Exception:
+    pass
+
 # ── Mandatory env vars ────────────────────────────────────────────────────────
 API_BASE_URL: str = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1/")
 MODEL_NAME: str   = os.getenv("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
