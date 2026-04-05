@@ -10,6 +10,7 @@ build/
 *.egg-info/
 .venv/
 venv/
+.pycache_tmp/
 uv.lock
 .DS_Store
 *.log
@@ -27,4 +28,3 @@ prompt_opt_env/uv_error.txt
 
 # Documentation
 docs/
-RUN.md
