@@ -114,6 +114,7 @@ if not _API_BASE_URL_CANDIDATES and API_BASE_URL:
     _API_BASE_URL_CANDIDATES = [API_BASE_URL]
 _ACTIVE_API_BASE_URL: str = _API_BASE_URL_CANDIDATES[0] if _API_BASE_URL_CANDIDATES else API_BASE_URL
 _LAST_LLM_ERROR = ""
+_LAST_LLM_FINISH_REASON = ""
 _ROUGE = rouge_scorer.RougeScorer(["rougeL"], use_stemmer=True)
 
 
@@ -154,9 +155,10 @@ def _ordered_api_base_urls() -> list[str]:
 
 def call_llm(prompt: str, max_tokens: int = 300) -> str:
     """Call LLM with the prompt and return output."""
-    global _LAST_LLM_ERROR, _ACTIVE_API_BASE_URL
+    global _LAST_LLM_ERROR, _LAST_LLM_FINISH_REASON, _ACTIVE_API_BASE_URL
     if not HF_TOKEN:
         _LAST_LLM_ERROR = "missing_api_key"
+        _LAST_LLM_FINISH_REASON = ""
         return ""
 
     errors: list[str] = []
@@ -174,15 +176,18 @@ def call_llm(prompt: str, max_tokens: int = 300) -> str:
             )
             _ACTIVE_API_BASE_URL = base_url
             _LAST_LLM_ERROR = ""
+            _LAST_LLM_FINISH_REASON = (r.choices[0].finish_reason or "").strip()
             return r.choices[0].message.content or ""
         except Exception as exc:
             error_text = f"{base_url} -> {type(exc).__name__}: {exc}"
             errors.append(error_text)
             if not _is_retryable_connection_error(exc):
                 _LAST_LLM_ERROR = error_text[:500]
+                _LAST_LLM_FINISH_REASON = ""
                 return ""
 
     _LAST_LLM_ERROR = (" | ".join(errors) if errors else "unknown_connection_error")[:500]
+    _LAST_LLM_FINISH_REASON = ""
     return ""
 
 
@@ -205,6 +210,7 @@ def get_llm_runtime_status() -> dict[str, Any]:
             )
         ),
         "last_llm_error": _LAST_LLM_ERROR,
+        "last_finish_reason": _LAST_LLM_FINISH_REASON,
     }
 
 
@@ -311,6 +317,11 @@ def _first_n_words(text: str, n: int) -> str:
     if len(words) <= n:
         return " ".join(words)
     return " ".join(words[:n]).strip() + " ..."
+
+
+def _normalized_text_signature(text: str) -> str:
+    """Normalize text for fair equality checks across whitespace/casing differences."""
+    return " ".join((text or "").strip().lower().split())
 
 
 def _parse_qa_input(input_data: str) -> tuple[str, str]:
@@ -567,6 +578,9 @@ def optimize_prompt_with_state(state: dict) -> dict:
         if reason and reason not in fallback_reasons:
             fallback_reasons.append(reason)
 
+    def last_response_truncated() -> bool:
+        return (_LAST_LLM_FINISH_REASON or "").strip().lower() == "length"
+
     output_token_cap = response_token_limit(task, goal)
     expert_prompt = build_reference_prompt(task, input_data)
     llm_calls_attempted += 1
@@ -592,6 +606,16 @@ def optimize_prompt_with_state(state: dict) -> dict:
     if not current_output:
         record_fallback("baseline_generation_failed")
         current_output = fallback_output(task, current_prompt, input_data)
+    elif last_response_truncated() and llm_calls_attempted < MAX_LLM_CALLS_PER_RUN:
+        # Retry once with a larger cap to avoid displaying visibly cut-off baseline text.
+        llm_calls_attempted += 1
+        retry_cap = min(260, max(output_token_cap + 40, int(output_token_cap * 1.5)))
+        retry_output = call_llm(
+            build_inference_prompt(task, current_prompt, input_data),
+            max_tokens=retry_cap,
+        )
+        if retry_output and not last_response_truncated():
+            current_output = retry_output
     current_score = score_output(current_output, reference_answer, task=task)
     current_tokens = count_tokens(current_prompt)
 
@@ -602,14 +626,8 @@ def optimize_prompt_with_state(state: dict) -> dict:
     initial_tokens = current_tokens
     initial_output_tokens = count_tokens(initial_output)
 
-    # Cost-safe output cap for optimization steps:
-    # keep optimized generations at or below the baseline output size.
-    if initial_output_tokens > 0:
-        reduction_factor = 0.85 if goal == "Low Cost" else 0.90
-        target_output_cap = max(8, int(initial_output_tokens * reduction_factor))
-        optimized_output_cap = min(output_token_cap, target_output_cap, initial_output_tokens)
-    else:
-        optimized_output_cap = output_token_cap
+    # Do not force lower caps than baseline; that can create visibly truncated outputs.
+    optimized_output_cap = output_token_cap
 
     # Optimization loop variables
     best_prompt = current_prompt
@@ -681,6 +699,10 @@ def optimize_prompt_with_state(state: dict) -> dict:
         if not new_output:
             record_fallback(f"step_{step + 1}_generation_failed")
             new_output = fallback_output(task, new_prompt, input_data)
+        elif last_response_truncated():
+            # Never treat cut-off generations as optimized results.
+            total_reward -= 0.2
+            continue
         new_score = score_output(new_output, reference_answer, task=task)
         new_output_tokens = count_tokens(new_output)
 
@@ -796,6 +818,8 @@ def optimize_prompt_with_state(state: dict) -> dict:
                 if not crafted_output:
                     record_fallback("rescue_crafted_prompt_failed")
                     crafted_output = fallback_output(task, crafted_prompt, input_data)
+                elif last_response_truncated():
+                    continue
 
                 crafted_score = score_output(crafted_output, reference_answer, task=task)
                 crafted_tokens = count_tokens(crafted_prompt)
@@ -856,6 +880,8 @@ def optimize_prompt_with_state(state: dict) -> dict:
                     if not candidate_output:
                         record_fallback(f"rescue_action_{rescue_action}_failed")
                         candidate_output = fallback_output(task, candidate_prompt, input_data)
+                    elif last_response_truncated():
+                        continue
 
                     candidate_score = score_output(candidate_output, reference_answer, task=task)
                     candidate_tokens = count_tokens(candidate_prompt)
@@ -920,6 +946,14 @@ def optimize_prompt_with_state(state: dict) -> dict:
         best_tokens = nonreg_best_tokens
         final_output_tokens = nonreg_best_output_tokens
     else:
+        best_prompt = initial_prompt
+        best_output = initial_output
+        best_score = initial_score
+        best_tokens = initial_tokens
+        final_output_tokens = initial_output_tokens
+
+    # If outputs are effectively identical, prevent false "improvement/reduction" reporting.
+    if _normalized_text_signature(best_output) == _normalized_text_signature(initial_output):
         best_prompt = initial_prompt
         best_output = initial_output
         best_score = initial_score
@@ -1503,9 +1537,6 @@ def _write_index_html(tpl_dir: str):
 <option value="Paraphrasing">Paraphrasing</option>
 <option value="Instruction Following">Instruction Following</option>
 </select>
-<div class="pointer-events-none absolute inset-y-0 right-0 flex items-center px-4 text-gray-500">
-<svg class="h-4 w-4" fill="none" stroke="currentColor" viewbox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M19 9l-7 7-7-7" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg>
-</div>
 </div>
 </div>
 <!-- Input Text -->
@@ -1545,9 +1576,7 @@ def _write_index_html(tpl_dir: str):
 <option value="High Quality">High Quality</option>
 <option value="Low Cost">Low Cost</option>
 </select>
-<div class="pointer-events-none absolute inset-y-0 right-0 flex items-center px-4 text-gray-500">
-<svg class="h-4 w-4" fill="none" stroke="currentColor" viewbox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M19 9l-7 7-7-7" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg>
-</div>
+
 </div>
 </div>
 <!-- Submit Button -->
