@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>PromptOptEnv - Prompt Optimization</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<style data-purpose="custom-fonts">
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+    body { font-family: 'Inter', sans-serif; }
+</style>
+<style data-purpose="custom-effects">
+    .glow-border {
+      position: relative;
+      border-radius: 14px;
+      z-index: 1;
+      overflow: hidden;
+      padding: 3px;
+    }
+    .glow-border::before {
+      content: "";
+      position: absolute;
+      top: -50%; left: -50%; bottom: -50%; right: -50%;
+      background: conic-gradient(transparent, transparent, transparent, #4d79ff, #ff4d4d);
+      z-index: -1;
+      animation: spin 10s linear infinite;
+    }
+    .glow-border-inner {
+      background: #050505;
+      border-radius: 12px;
+      position: relative;
+      z-index: 2;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      height: 100%;
+    }
+    @keyframes spin { 100% { transform: rotate(360deg); } }
+    .hidden { display: none !important; }
+</style>
+<style>
+
+    /* Custom Scrollbar */
+    ::-webkit-scrollbar {
+      width: 8px;
+      height: 8px;
+    }
+    ::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: rgba(255, 255, 255, 0.15);
+      border-radius: 10px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: rgba(255, 255, 255, 0.25);
+    }
+    * {
+      scrollbar-width: thin;
+      scrollbar-color: rgba(255, 255, 255, 0.15) transparent;
+    }
+
+</style>
+</head>
+<body class="bg-black text-gray-300 min-h-screen flex flex-col items-center justify-center p-4">
+<!-- Back to Home -->
+<a href="/" class="absolute top-6 left-6 flex items-center gap-2 text-gray-400 hover:text-white transition-colors group z-50">
+    <svg class="h-5 w-5 transform group-hover:-translate-x-1 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M10 19l-7-7m0 0l7-7m-7 7h18" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg>
+    <span class="text-sm font-medium">Back to Home</span>
+</a>
+
+<!-- BEGIN: Header Section -->
+<header class="text-center mb-6">
+<h1 class="text-white text-4xl font-bold mb-2 tracking-tight"><a href="/">PromptOptEnv</a></h1>
+<p class="text-gray-400 text-sm">RL-Powered Prompt Optimization with Cost Awareness</p>
+</header>
+<!-- END: Header Section -->
+<!-- BEGIN: Main Form Container -->
+<main class="w-full max-w-2xl glow-border">
+<div class="glow-border-inner p-8 shadow-2xl">
+<form action="/optimize" class="space-y-6" method="POST">
+<!-- Select Task -->
+<div data-purpose="form-group">
+<label class="block text-sm font-medium text-gray-300 mb-2" for="task">Select Task</label>
+<div class="relative">
+<select class="block w-full bg-black border border-gray-700 rounded-md py-3 pl-4 pr-10 text-gray-400 focus:outline-none focus:ring-1 focus:ring-gray-500 focus:border-gray-500 sm:text-sm appearance-none" id="task" name="task">
+<option value="Summarization">Summarization</option>
+<option value="Question Answering">Question Answering</option>
+<option value="Paraphrasing">Paraphrasing</option>
+<option value="Instruction Following">Instruction Following</option>
+</select>
+</div>
+</div>
+<!-- Input Text -->
+<div id="generic-input-group" data-purpose="form-group">
+<label id="generic-input-label" class="block text-sm font-medium text-gray-300 mb-2" for="input-text">Input Text</label>
+<textarea class="block w-full bg-black border border-gray-700 rounded-md py-3 px-4 text-gray-400 placeholder-gray-600 focus:outline-none focus:ring-1 focus:ring-gray-500 focus:border-gray-500 sm:text-sm resize-y" id="input-text" name="input-text" placeholder="Paste the paragraph you want to optimize for submission..." rows="4"></textarea>
+</div>
+
+<!-- QA Inputs -->
+<div id="qa-input-group" class="hidden space-y-6">
+    <div data-purpose="form-group">
+    <label class="block text-sm font-medium text-gray-300 mb-2" for="context">Context</label>
+    <textarea class="block w-full bg-black border border-gray-700 rounded-md py-3 px-4 text-gray-400 placeholder-gray-600 focus:outline-none focus:ring-1 focus:ring-gray-500 focus:border-gray-500 sm:text-sm resize-y" id="context" name="context" placeholder="Enter context passage..." rows="3"></textarea>
+    </div>
+    
+    <div data-purpose="form-group">
+    <label class="block text-sm font-medium text-gray-300 mb-2" for="question">Question</label>
+    <textarea class="block w-full bg-black border border-gray-700 rounded-md py-3 px-4 text-gray-400 placeholder-gray-600 focus:outline-none focus:ring-1 focus:ring-gray-500 focus:border-gray-500 sm:text-sm resize-y" id="question" name="question" placeholder="Enter your question..." rows="2"></textarea>
+    </div>
+</div>
+
+<!-- Divider / Optional Config Header -->
+<div class="pt-2">
+<h3 class="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-4">OPTIONAL CONFIGURATION</h3>
+</div>
+<!-- Initial Prompt -->
+<div data-purpose="form-group">
+<label class="block text-sm font-medium text-gray-300 mb-2" for="initial-prompt">Initial Prompt (Optional)</label>
+<textarea class="block w-full bg-black border border-gray-700 rounded-md py-3 px-4 text-gray-400 placeholder-gray-600 focus:outline-none focus:ring-1 focus:ring-gray-500 focus:border-gray-500 sm:text-sm resize-y" id="initial-prompt" name="initial-prompt" placeholder="e.g., Summarize this for a technical audience..." rows="3"></textarea>
+</div>
+<!-- Optimization Goal -->
+<div data-purpose="form-group">
+<label class="block text-sm font-medium text-gray-300 mb-2" for="optimization-goal">Optimization Goal</label>
+<div class="relative">
+<select class="block w-full bg-black border border-gray-700 rounded-md py-3 pl-4 pr-10 text-gray-400 focus:outline-none focus:ring-1 focus:ring-gray-500 focus:border-gray-500 sm:text-sm appearance-none" id="optimization-goal" name="optimization-goal">
+<option value="Balanced">Balanced</option>
+<option value="High Quality">High Quality</option>
+<option value="Low Cost">Low Cost</option>
+</select>
+
+</div>
+</div>
+<!-- Submit Button -->
+<div class="pt-4">
+<button class="w-full bg-black border border-gray-600 rounded-full py-3 px-4 text-sm font-medium text-white hover:bg-gray-900 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-500 focus:ring-offset-black transition-colors duration-200" type="submit">
+            Optimize Prompt
+</button>
+</div>
+</form>
+</div>
+</main>
+<!-- END: Main Form Container -->
+<script>
+    const taskField = document.getElementById("task");
+    const genericInputGroup = document.getElementById("generic-input-group");
+    const genericInputLabel = document.getElementById("generic-input-label");
+    const genericInput = document.getElementById("input-text");
+    const qaInputGroup = document.getElementById("qa-input-group");
+
+    const inputConfig = {
+        "Summarization": { label: "Input Text", placeholder: "Paste the paragraph you want to summarize..." },
+        "Paraphrasing": { label: "Sentence", placeholder: "Enter a sentence to paraphrase..." },
+        "Instruction Following": { label: "Instruction", placeholder: "e.g., Explain photosynthesis in simple terms" }
+    };
+
+    function updateTaskInputs() {
+        const selectedTask = taskField.value;
+        if (selectedTask === "Question Answering") {
+            genericInputGroup.classList.add("hidden");
+            qaInputGroup.classList.remove("hidden");
+            return;
+        }
+        qaInputGroup.classList.add("hidden");
+        genericInputGroup.classList.remove("hidden");
+        const config = inputConfig[selectedTask] || inputConfig["Summarization"];
+        genericInputLabel.textContent = config.label;
+        genericInput.placeholder = config.placeholder;
+    }
+    taskField.addEventListener("change", updateTaskInputs);
+    updateTaskInputs();
+
+    document.querySelector('form').addEventListener('submit', function(e) {
+        const selected = taskField.value;
+        if (selected === "Question Answering") {
+            const ctx = document.getElementById('context').value.trim();
+            const q = document.getElementById('question').value.trim();
+            if (!ctx && !q) {
+                e.preventDefault();
+                alert('Please provide Context or a Question before optimizing.');
+            }
+        } else {
+            const txt = document.getElementById('input-text').value.trim();
+            if (!txt) {
+                e.preventDefault();
+                alert('Please provide Input Text before optimizing.');
+            }
+        }
+    });
+</script>
+</body></html>

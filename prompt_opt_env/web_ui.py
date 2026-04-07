@@ -26,7 +26,7 @@ try:
 except ImportError:
     pass  # python-dotenv not installed; fall back to shell env
 
-from fastapi import FastAPI, Form, Request
+from fastapi import FastAPI, Form, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 import uvicorn
@@ -1061,12 +1061,16 @@ templates = Jinja2Templates(directory=TPL_DIR)
 
 
 @app.get("/", response_class=HTMLResponse)
+@app.get("/web", response_class=HTMLResponse)
+@app.get("/web/", response_class=HTMLResponse)
 async def landing(request: Request):
     """Render the landing page."""
     return templates.TemplateResponse("landing.html", {"request": request})
 
 
 @app.get("/app", response_class=HTMLResponse)
+@app.get("/web/app", response_class=HTMLResponse)
+@app.get("/web/app/", response_class=HTMLResponse)
 async def home(request: Request):
     """Render the main optimizer form page."""
     return templates.TemplateResponse("index.html", {"request": request})
@@ -1082,6 +1086,7 @@ DEFAULT_PROMPTS = {
 
 
 @app.post("/optimize", response_class=HTMLResponse)
+@app.post("/web/optimize", response_class=HTMLResponse)
 async def optimize(
     request: Request,
     task: str = Form("Summarization"),
@@ -1116,6 +1121,27 @@ async def optimize(
         "request": request,
         **results
     })
+
+
+@app.websocket("/ws/ui")
+async def hf_ui_websocket(websocket: WebSocket):
+    """
+    HF App shell may probe /ws/ui. Accept a no-op websocket so the app
+    doesn't emit repeated 403 logs and the shell handshake stays healthy.
+    """
+    await websocket.accept()
+    try:
+        while True:
+            message = await websocket.receive()
+            if message.get("type") == "websocket.disconnect":
+                break
+    except WebSocketDisconnect:
+        pass
+    except Exception:
+        try:
+            await websocket.close()
+        except Exception:
+            pass
 
 
 def _write_landing_html(tpl_dir: str):

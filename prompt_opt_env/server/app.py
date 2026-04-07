@@ -23,13 +23,31 @@ app = create_app(
 
 # ── Mount custom Web UI for HuggingFace deployment ───────────────────────────
 try:
-    from web_ui import landing, home, optimize, _write_templates
+    try:
+        from prompt_opt_env.web_ui import landing, home, optimize, _write_templates
+    except Exception:
+        try:
+            from ..web_ui import landing, home, optimize, _write_templates
+        except Exception:
+            from web_ui import landing, home, optimize, _write_templates
     from fastapi.responses import HTMLResponse
+    
+    # Remove any existing root route injected dynamically by openenv push
+    app.router.routes = [r for r in app.router.routes if getattr(r, "path", None) not in ["/", "/app", "/optimize"]]
+
     _write_templates()
+    
+    # Add routes and force them to the absolute front of the routing table
     app.get("/", response_class=HTMLResponse)(landing)
+    app.router.routes.insert(0, app.router.routes.pop())
+    
     app.get("/app", response_class=HTMLResponse)(home)
+    app.router.routes.insert(0, app.router.routes.pop())
+    
     app.post("/optimize", response_class=HTMLResponse)(optimize)
-    print("[INFO] Successfully mounted Custom Dark UI on /")
+    app.router.routes.insert(0, app.router.routes.pop())
+    
+    print("[INFO] Successfully mounted Custom Dark UI on / with highest priority")
 except Exception as e:
     print(f"[WARNING] Web UI could not be mounted: {e}")
 
