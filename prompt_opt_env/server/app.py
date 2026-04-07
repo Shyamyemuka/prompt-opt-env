@@ -22,14 +22,8 @@ app = create_app(
 )
 
 # ── Mount custom Web UI for HuggingFace deployment ───────────────────────────
-import sys
-import os
-REPO_ROOT = "/app/env" if os.path.exists("/app/env/web_app.py") else os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-if REPO_ROOT not in sys.path:
-    sys.path.insert(0, REPO_ROOT)
-
 try:
-    from web_app import landing, home, optimize, _write_templates
+    from web_ui import landing, home, optimize, _write_templates
     from fastapi.responses import HTMLResponse
     _write_templates()
     app.get("/", response_class=HTMLResponse)(landing)
