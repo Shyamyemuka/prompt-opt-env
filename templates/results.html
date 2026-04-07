@@ -35,6 +35,18 @@
         .success-text {
             color: #2e7d32; font-weight: bold; margin-top: 20px;
         }
+        .metrics-block {
+            margin-top: 18px;
+            padding: 12px;
+            background: #f7f9ff;
+            border: 1px solid #d7deef;
+            border-radius: 10px;
+        }
+        .metric-line {
+            margin: 6px 0;
+            font-weight: 600;
+            color: #2f3b52;
+        }
         .info-text {
             color: #5f6368; margin-top: 14px; font-size: 14px;
         }
@@ -82,19 +94,17 @@
             <div class="label">Reward: {{ "%.2f"|format(final_reward) }}</div>
             <div class="label">Total Episode Reward: {{ "%.2f"|format(total_reward) }}</div>
             
-            {% if token_change < 0 %}
-            <div class="success-text">
-                Token cost reduced by {{ "%.0f"|format(token_reduction_pct) }}%
+            <div class="metrics-block">
+                <div class="metric-line">
+                    Token Reduction: {{ "%+.0f"|format(token_reduction_abs) }} ({{ "%+.1f"|format(token_reduction_pct_total) }}%)
+                </div>
+                <div class="metric-line">
+                    Cost Reduction: {{ "%+.2f"|format(cost_reduction_abs) }} ({{ "%+.1f"|format(cost_reduction_pct) }}%)
+                </div>
+                <div class="metric-line">
+                    Quality Improvement: {{ "%+.4f"|format(quality_improvement_abs) }} ({{ "%+.1f"|format(quality_improvement_pct) }}%)
+                </div>
             </div>
-            {% elif token_change > 0 %}
-            <div class="success-text">
-                Token cost increased by {{ token_change }} tokens
-            </div>
-            {% else %}
-            <div class="success-text">
-                Token cost unchanged
-            </div>
-            {% endif %}
             {% if used_fallback %}
             <div class="info-text">
                 API connection failed, so offline fallback outputs were used for this run.

@@ -57,6 +57,7 @@ ALPHA: float = float(os.getenv("TOKEN_PENALTY_ALPHA", "0.02"))
 DONE_THRESHOLD: float = float(os.getenv("DONE_THRESHOLD", "0.85"))
 MAX_STEPS: int = int(os.getenv("MAX_STEPS", "7"))
 LLM_TIMEOUT_SECONDS: float = float(os.getenv("LLM_TIMEOUT_SECONDS", "10"))
+OUTPUT_TOKEN_COST: float = float(os.getenv("OUTPUT_TOKEN_COST", "1.0"))
 
 if not HF_TOKEN:
     print("[WARNING] HF_TOKEN not set. Add it to .env.local as HF_TOKEN=hf_...")
@@ -353,22 +354,39 @@ def intelligent_action_selection(
 ) -> int:
     """Select best action based on current state."""
     prompt_lower = current_prompt.lower()
+    prompt_tokens = count_tokens(current_prompt)
 
     if task == "Summarization":
-        if current_score >= 0.72:
+        if current_score >= 0.70:
             return 5
-        if "requirement:" not in prompt_lower:
+
+        if "please" in prompt_lower or "could you" in prompt_lower:
+            return 1
+
+        if step == 0:
+            return 3
+
+        if (
+            current_score < 0.60
+            and "requirement:" not in prompt_lower
+            and tokens_remaining > 10
+            and prompt_tokens < 16
+        ):
             return 4
+
         if (
             "example output format:" not in prompt_lower
             and goal == "High Quality"
             and tokens_remaining > 18
             and step <= 1
+            and current_score < 0.58
         ):
             return 2
-        if "please" in prompt_lower or "could you" in prompt_lower:
+
+        if goal == "Low Cost" and prompt_tokens > 8:
             return 1
-        return 5 if step >= 2 else 3
+
+        return 5
 
     if current_score >= 0.80:
         return 5
@@ -439,6 +457,7 @@ def optimize_prompt_with_state(state: dict) -> dict:
     best_output = current_output
     best_score = current_score
     best_tokens = current_tokens
+    best_total_tokens = current_tokens + count_tokens(current_output)
     total_reward = 0.0
 
     steps_taken = 0
@@ -489,12 +508,19 @@ def optimize_prompt_with_state(state: dict) -> dict:
         step_reward = clip_reward(quality_delta - ALPHA * token_overhead)
         total_reward += step_reward
 
-        # Acceptance logic
-        if new_score > best_score or (new_score >= best_score - 0.05 and new_tokens < best_tokens):
+        # Acceptance logic: prefer quality, but strongly prefer lower total token usage
+        # when quality is similar.
+        new_total_tokens = new_tokens + count_tokens(new_output)
+        if (
+            new_score > best_score
+            or (new_score >= best_score - 0.03 and new_total_tokens < best_total_tokens)
+            or (task == "Summarization" and new_score >= best_score - 0.02 and new_total_tokens < best_total_tokens)
+        ):
             best_prompt = new_prompt
             best_output = new_output
             best_score = new_score
             best_tokens = new_tokens
+            best_total_tokens = new_total_tokens
 
         current_prompt = new_prompt
         current_output = new_output
@@ -510,6 +536,27 @@ def optimize_prompt_with_state(state: dict) -> dict:
     improvement_pct = ((best_score - initial_score) / initial_score * 100) if initial_score > 0 else 0
     token_change = best_tokens - initial_tokens
     token_reduction_pct = (abs(token_change) / initial_tokens * 100) if initial_tokens > 0 and token_change < 0 else 0
+
+    initial_output_tokens = count_tokens(initial_output)
+    final_output_tokens = count_tokens(best_output)
+    initial_total_tokens = initial_tokens + initial_output_tokens
+    final_total_tokens = best_tokens + final_output_tokens
+
+    # Displayed reduction metrics are output-focused for user-facing cost tracking.
+    token_reduction_abs = initial_output_tokens - final_output_tokens
+    token_reduction_pct_total = (
+        (token_reduction_abs / initial_output_tokens) * 100.0 if initial_output_tokens > 0 else 0.0
+    )
+
+    initial_cost = initial_output_tokens * OUTPUT_TOKEN_COST
+    final_cost = final_output_tokens * OUTPUT_TOKEN_COST
+    cost_reduction_abs = initial_cost - final_cost
+    cost_reduction_pct = (cost_reduction_abs / initial_cost * 100.0) if initial_cost > 0 else 0.0
+
+    quality_improvement_abs = best_score - initial_score
+    quality_improvement_pct = (
+        (quality_improvement_abs / initial_score) * 100.0 if initial_score > 0 else quality_improvement_abs * 100.0
+    )
 
     return {
         "task": task,
@@ -527,6 +574,18 @@ def optimize_prompt_with_state(state: dict) -> dict:
         "improvement_pct": improvement_pct,
         "token_change": token_change,
         "token_reduction_pct": token_reduction_pct,
+        "initial_output_tokens": initial_output_tokens,
+        "final_output_tokens": final_output_tokens,
+        "initial_total_tokens": initial_total_tokens,
+        "final_total_tokens": final_total_tokens,
+        "token_reduction_abs": token_reduction_abs,
+        "token_reduction_pct_total": token_reduction_pct_total,
+        "initial_cost": initial_cost,
+        "final_cost": final_cost,
+        "cost_reduction_abs": cost_reduction_abs,
+        "cost_reduction_pct": cost_reduction_pct,
+        "quality_improvement_abs": quality_improvement_abs,
+        "quality_improvement_pct": quality_improvement_pct,
         "total_reward": total_reward,
         "termination_reason": termination_reason,
         "used_fallback": used_fallback,
@@ -865,6 +924,18 @@ def _write_results_html(tpl_dir: str):
         .success-text {
             color: #2e7d32; font-weight: bold; margin-top: 20px;
         }
+        .metrics-block {
+            margin-top: 18px;
+            padding: 12px;
+            background: #f7f9ff;
+            border: 1px solid #d7deef;
+            border-radius: 10px;
+        }
+        .metric-line {
+            margin: 6px 0;
+            font-weight: 600;
+            color: #2f3b52;
+        }
         .info-text {
             color: #5f6368; margin-top: 14px; font-size: 14px;
         }
@@ -912,19 +983,17 @@ def _write_results_html(tpl_dir: str):
             <div class="label">Reward: {{ "%.2f"|format(final_reward) }}</div>
             <div class="label">Total Episode Reward: {{ "%.2f"|format(total_reward) }}</div>
             
-            {% if token_change < 0 %}
-            <div class="success-text">
-                Token cost reduced by {{ "%.0f"|format(token_reduction_pct) }}%
+            <div class="metrics-block">
+                <div class="metric-line">
+                    Token Reduction: {{ "%+.0f"|format(token_reduction_abs) }} ({{ "%+.1f"|format(token_reduction_pct_total) }}%)
+                </div>
+                <div class="metric-line">
+                    Cost Reduction: {{ "%+.2f"|format(cost_reduction_abs) }} ({{ "%+.1f"|format(cost_reduction_pct) }}%)
+                </div>
+                <div class="metric-line">
+                    Quality Improvement: {{ "%+.4f"|format(quality_improvement_abs) }} ({{ "%+.1f"|format(quality_improvement_pct) }}%)
+                </div>
             </div>
-            {% elif token_change > 0 %}
-            <div class="success-text">
-                Token cost increased by {{ token_change }} tokens
-            </div>
-            {% else %}
-            <div class="success-text">
-                Token cost unchanged
-            </div>
-            {% endif %}
             {% if used_fallback %}
             <div class="info-text">
                 API connection failed, so offline fallback outputs were used for this run.
