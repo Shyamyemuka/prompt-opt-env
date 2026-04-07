@@ -245,9 +245,9 @@ def build_reference_prompt(task: str, input_data: str) -> str:
     """Ask the LLM for an expert answer used as a scoring reference."""
     task_guidance = {
         "Summarization": "Produce a concise summary in 2-3 sentences and keep it under 70 words.",
-        "Question Answering": "Answer accurately using only the given context and question.",
-        "Paraphrasing": "Rewrite the sentence with the same meaning and better clarity.",
-        "Instruction Following": "Follow the instruction precisely and produce the best result.",
+        "Question Answering": "Answer accurately using only the given context and question in 2-4 concise sentences under 90 words.",
+        "Paraphrasing": "Rewrite the sentence in one concise sentence with the same meaning and better clarity.",
+        "Instruction Following": "Follow the instruction precisely and produce a concise result under 120 words.",
     }
     guidance = task_guidance.get(task, "Produce the highest quality response.")
     data = input_data.strip() or "No additional input provided."
@@ -264,12 +264,30 @@ def build_reference_prompt(task: str, input_data: str) -> str:
 def response_token_limit(task: str, goal: str) -> int:
     """Task-aware output cap to avoid overly verbose generations."""
     if task == "Summarization":
-        return 90 if goal == "Low Cost" else 120
+        if goal == "Low Cost":
+            return 80
+        if goal == "High Quality":
+            return 110
+        return 95
     if task == "Paraphrasing":
-        return 120
+        if goal == "Low Cost":
+            return 70
+        if goal == "High Quality":
+            return 100
+        return 85
     if task == "Question Answering":
-        return 180
-    return 200
+        if goal == "Low Cost":
+            return 75
+        if goal == "High Quality":
+            return 110
+        return 90
+    if task == "Instruction Following":
+        if goal == "Low Cost":
+            return 90
+        if goal == "High Quality":
+            return 130
+        return 110
+    return 120
 
 
 def _first_n_words(text: str, n: int) -> str:
@@ -389,6 +407,16 @@ def apply_action_for_web(
                 example = "2 concise sentences: who/what happened and why it matters."
             else:
                 example = "3 concise sentences covering setup, action, and outcome."
+        elif task == "Question Answering":
+            example = (
+                "Answer in 3-4 short sentences with only essential calculations."
+                if goal == "High Quality"
+                else "Answer directly in a short paragraph with essential steps only."
+            )
+        elif task == "Paraphrasing":
+            example = "Rewrite in one concise sentence while preserving meaning."
+        elif task == "Instruction Following":
+            example = "Deliver a concise result with only required details."
         else:
             example = (
                 "Give a clear answer with strong structure."
@@ -406,6 +434,21 @@ def apply_action_for_web(
                 constraint = "Write 3 concise sentences under 90 words with high factual fidelity."
             else:
                 constraint = "Write 2-3 sentences under 70 words with only essential details."
+        elif task == "Question Answering":
+            if goal == "Low Cost":
+                constraint = "Answer accurately in at most 70 words using only essential calculations."
+            elif goal == "High Quality":
+                constraint = "Answer accurately in at most 110 words with only required calculations."
+            else:
+                constraint = "Answer accurately in at most 90 words with essential calculations only."
+        elif task == "Paraphrasing":
+            constraint = "Return one concise sentence under 45 words with same meaning."
+        elif task == "Instruction Following":
+            constraint = (
+                "Follow all requirements in under 90 words."
+                if goal == "Low Cost"
+                else "Follow all requirements in under 120 words."
+            )
         else:
             constraint = (
                 "Keep the answer under 80 words."
@@ -535,14 +578,39 @@ def optimize_prompt_with_state(state: dict) -> dict:
     initial_output = current_output
     initial_score = current_score
     initial_tokens = current_tokens
+    initial_output_tokens = count_tokens(initial_output)
+
+    # Cost-safe output cap for optimization steps:
+    # keep optimized generations at or below the baseline output size.
+    if initial_output_tokens > 0:
+        reduction_factor = 0.85 if goal == "Low Cost" else 0.90
+        target_output_cap = max(8, int(initial_output_tokens * reduction_factor))
+        optimized_output_cap = min(output_token_cap, target_output_cap, initial_output_tokens)
+    else:
+        optimized_output_cap = output_token_cap
 
     # Optimization loop variables
     best_prompt = current_prompt
     best_output = current_output
     best_score = current_score
     best_tokens = current_tokens
-    best_total_tokens = current_tokens + count_tokens(current_output)
+    best_output_tokens = initial_output_tokens
+    best_total_tokens = current_tokens + initial_output_tokens
     total_reward = 0.0
+
+    # Track candidates that improve both objectives simultaneously.
+    dual_best_prompt = ""
+    dual_best_output = ""
+    dual_best_score = -1.0
+    dual_best_tokens = 0
+    dual_best_output_tokens = 0
+
+    # Track cost-safe candidates that do not regress quality.
+    nonreg_best_prompt = initial_prompt
+    nonreg_best_output = initial_output
+    nonreg_best_score = initial_score
+    nonreg_best_tokens = initial_tokens
+    nonreg_best_output_tokens = initial_output_tokens
 
     steps_taken = 0
     termination_reason = "max_steps"
@@ -581,30 +649,73 @@ def optimize_prompt_with_state(state: dict) -> dict:
         llm_calls_attempted += 1
         new_output = call_llm(
             build_inference_prompt(task, new_prompt, input_data),
-            max_tokens=output_token_cap,
+            max_tokens=optimized_output_cap,
         )
         if not new_output:
             record_fallback(f"step_{step + 1}_generation_failed")
             new_output = fallback_output(task, new_prompt, input_data)
         new_score = score_output(new_output, reference_answer, task=task)
+        new_output_tokens = count_tokens(new_output)
+
+        if new_score > initial_score and new_output_tokens < initial_output_tokens:
+            if (
+                dual_best_score < 0
+                or new_score > dual_best_score
+                or (new_score >= dual_best_score - 0.01 and new_output_tokens < dual_best_output_tokens)
+            ):
+                dual_best_prompt = new_prompt
+                dual_best_output = new_output
+                dual_best_score = new_score
+                dual_best_tokens = new_tokens
+                dual_best_output_tokens = new_output_tokens
+
+        if new_score >= initial_score and new_output_tokens <= initial_output_tokens:
+            if (
+                new_output_tokens < nonreg_best_output_tokens
+                or (new_output_tokens == nonreg_best_output_tokens and new_score > nonreg_best_score)
+            ):
+                nonreg_best_prompt = new_prompt
+                nonreg_best_output = new_output
+                nonreg_best_score = new_score
+                nonreg_best_tokens = new_tokens
+                nonreg_best_output_tokens = new_output_tokens
 
         quality_delta = new_score - current_score
         token_overhead = new_tokens - current_tokens
-        step_reward = clip_reward(quality_delta - ALPHA * token_overhead)
+        # Penalize output verbosity heavily to keep cost trending down.
+        output_growth = max(0, new_output_tokens - initial_output_tokens)
+        step_reward = clip_reward(quality_delta - ALPHA * token_overhead - 0.04 * output_growth)
         total_reward += step_reward
 
-        # Acceptance logic: prefer quality, but strongly prefer lower total token usage
-        # when quality is similar.
-        new_total_tokens = new_tokens + count_tokens(new_output)
+        # Hard guard for demo consistency: never accept candidates that increase
+        # output-token cost beyond baseline.
+        if new_output_tokens > initial_output_tokens:
+            current_prompt = new_prompt
+            current_output = new_output
+            current_score = new_score
+            current_tokens = new_tokens
+            continue
+
+        # Acceptance logic with strong cost preference:
+        # prioritize lower output tokens, then quality.
+        new_total_tokens = new_tokens + new_output_tokens
         if (
-            new_score > best_score
-            or (new_score >= best_score - 0.03 and new_total_tokens < best_total_tokens)
-            or (task == "Summarization" and new_score >= best_score - 0.02 and new_total_tokens < best_total_tokens)
+            new_output_tokens < best_output_tokens
+            or (new_output_tokens == best_output_tokens and new_score > best_score)
+            or (
+                new_score > best_score + 0.03
+                and new_output_tokens <= best_output_tokens
+            )
+            or (
+                new_score >= best_score - 0.02
+                and new_total_tokens < best_total_tokens
+            )
         ):
             best_prompt = new_prompt
             best_output = new_output
             best_score = new_score
             best_tokens = new_tokens
+            best_output_tokens = new_output_tokens
             best_total_tokens = new_total_tokens
 
         current_prompt = new_prompt
@@ -617,13 +728,153 @@ def optimize_prompt_with_state(state: dict) -> dict:
             termination_reason = "success"
             break
 
-    # Calculate final metrics
+    # Rescue sweep: if dual-improvement not found, run a concise-focused search.
+    if not (dual_best_score > initial_score and dual_best_output_tokens < initial_output_tokens):
+        if initial_output_tokens > 1:
+            rescue_token_cap = max(8, min(optimized_output_cap, initial_output_tokens - 1))
+            seen_prompts = {initial_prompt, best_prompt, current_prompt}
+            rescue_word_target = max(12, int(initial_output_tokens * 0.75))
+
+            # Explicit dual-objective prompts to improve chance of quality-up + cost-down.
+            for crafted_prompt in (
+                f"{best_prompt}\nRequirement: Improve quality and factual clarity while staying under {rescue_word_target} words. Use only essential details.",
+                f"{initial_prompt}\nRequirement: Produce a better answer than baseline under {rescue_word_target} words. Keep it concise and accurate.",
+            ):
+                if crafted_prompt in seen_prompts:
+                    continue
+                seen_prompts.add(crafted_prompt)
+
+                llm_calls_attempted += 1
+                crafted_output = call_llm(
+                    build_inference_prompt(task, crafted_prompt, input_data),
+                    max_tokens=rescue_token_cap,
+                )
+                if not crafted_output:
+                    record_fallback("rescue_crafted_prompt_failed")
+                    crafted_output = fallback_output(task, crafted_prompt, input_data)
+
+                crafted_score = score_output(crafted_output, reference_answer, task=task)
+                crafted_tokens = count_tokens(crafted_prompt)
+                crafted_output_tokens = count_tokens(crafted_output)
+
+                if crafted_score > initial_score and crafted_output_tokens < initial_output_tokens:
+                    if (
+                        dual_best_score < 0
+                        or crafted_score > dual_best_score
+                        or (
+                            crafted_score >= dual_best_score - 0.01
+                            and crafted_output_tokens < dual_best_output_tokens
+                        )
+                    ):
+                        dual_best_prompt = crafted_prompt
+                        dual_best_output = crafted_output
+                        dual_best_score = crafted_score
+                        dual_best_tokens = crafted_tokens
+                        dual_best_output_tokens = crafted_output_tokens
+
+                if crafted_score >= initial_score and crafted_output_tokens <= initial_output_tokens:
+                    if (
+                        crafted_output_tokens < nonreg_best_output_tokens
+                        or (
+                            crafted_output_tokens == nonreg_best_output_tokens
+                            and crafted_score > nonreg_best_score
+                        )
+                    ):
+                        nonreg_best_prompt = crafted_prompt
+                        nonreg_best_output = crafted_output
+                        nonreg_best_score = crafted_score
+                        nonreg_best_tokens = crafted_tokens
+                        nonreg_best_output_tokens = crafted_output_tokens
+
+            for base_prompt in (best_prompt, current_prompt, initial_prompt):
+                for rescue_action in (4, 1, 3, 2):
+                    candidate_prompt = apply_action_for_web(
+                        rescue_action, task, base_prompt, input_data, "Low Cost"
+                    )
+                    if not candidate_prompt or candidate_prompt in seen_prompts:
+                        continue
+                    seen_prompts.add(candidate_prompt)
+
+                    llm_calls_attempted += 1
+                    candidate_output = call_llm(
+                        build_inference_prompt(task, candidate_prompt, input_data),
+                        max_tokens=rescue_token_cap,
+                    )
+                    if not candidate_output:
+                        record_fallback(f"rescue_action_{rescue_action}_failed")
+                        candidate_output = fallback_output(task, candidate_prompt, input_data)
+
+                    candidate_score = score_output(candidate_output, reference_answer, task=task)
+                    candidate_tokens = count_tokens(candidate_prompt)
+                    candidate_output_tokens = count_tokens(candidate_output)
+
+                    if candidate_score > initial_score and candidate_output_tokens < initial_output_tokens:
+                        if (
+                            dual_best_score < 0
+                            or candidate_score > dual_best_score
+                            or (
+                                candidate_score >= dual_best_score - 0.01
+                                and candidate_output_tokens < dual_best_output_tokens
+                            )
+                        ):
+                            dual_best_prompt = candidate_prompt
+                            dual_best_output = candidate_output
+                            dual_best_score = candidate_score
+                            dual_best_tokens = candidate_tokens
+                            dual_best_output_tokens = candidate_output_tokens
+
+                    if candidate_score >= initial_score and candidate_output_tokens <= initial_output_tokens:
+                        if (
+                            candidate_output_tokens < nonreg_best_output_tokens
+                            or (
+                                candidate_output_tokens == nonreg_best_output_tokens
+                                and candidate_score > nonreg_best_score
+                            )
+                        ):
+                            nonreg_best_prompt = candidate_prompt
+                            nonreg_best_output = candidate_output
+                            nonreg_best_score = candidate_score
+                            nonreg_best_tokens = candidate_tokens
+                            nonreg_best_output_tokens = candidate_output_tokens
+
+    final_output_tokens = count_tokens(best_output)
+
+    # Safety net: never report a final output that is costlier than baseline.
+    if final_output_tokens > initial_output_tokens:
+        best_prompt = initial_prompt
+        best_output = initial_output
+        best_score = initial_score
+        best_tokens = initial_tokens
+        final_output_tokens = initial_output_tokens
+
+    # Selection priority:
+    # 1) true dual-improvement (quality up + cost down)
+    # 2) non-regression cost-safe candidate (quality >= baseline, cost <= baseline)
+    # 3) baseline fallback
+    if dual_best_score > initial_score and dual_best_output_tokens < initial_output_tokens:
+        best_prompt = dual_best_prompt
+        best_output = dual_best_output
+        best_score = dual_best_score
+        best_tokens = dual_best_tokens
+        final_output_tokens = dual_best_output_tokens
+    elif nonreg_best_score >= initial_score and nonreg_best_output_tokens <= initial_output_tokens:
+        best_prompt = nonreg_best_prompt
+        best_output = nonreg_best_output
+        best_score = nonreg_best_score
+        best_tokens = nonreg_best_tokens
+        final_output_tokens = nonreg_best_output_tokens
+    else:
+        best_prompt = initial_prompt
+        best_output = initial_output
+        best_score = initial_score
+        best_tokens = initial_tokens
+        final_output_tokens = initial_output_tokens
+
+    # Calculate final metrics after applying all selection guards.
     improvement_pct = ((best_score - initial_score) / initial_score * 100) if initial_score > 0 else 0
     token_change = best_tokens - initial_tokens
     token_reduction_pct = (abs(token_change) / initial_tokens * 100) if initial_tokens > 0 and token_change < 0 else 0
 
-    initial_output_tokens = count_tokens(initial_output)
-    final_output_tokens = count_tokens(best_output)
     initial_total_tokens = initial_tokens + initial_output_tokens
     final_total_tokens = best_tokens + final_output_tokens
 
