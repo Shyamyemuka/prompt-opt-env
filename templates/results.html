@@ -33,7 +33,38 @@
       border: 1px solid rgba(255, 255, 255, 0.1);
       height: 100%;
     }
+    .scrollable-block {
+      min-height: 8rem;
+      max-height: 20rem;
+      overflow: auto;
+      white-space: pre-wrap;
+      word-break: break-word;
+      scrollbar-gutter: stable;
+    }
     @keyframes spin { 100% { transform: rotate(360deg); } }
+</style>
+<style>
+
+    /* Custom Scrollbar */
+    ::-webkit-scrollbar {
+      width: 8px;
+      height: 8px;
+    }
+    ::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: rgba(255, 255, 255, 0.15);
+      border-radius: 10px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: rgba(255, 255, 255, 0.25);
+    }
+    * {
+      scrollbar-width: thin;
+      scrollbar-color: rgba(255, 255, 255, 0.15) transparent;
+    }
+
 </style>
 </head>
 <body class="bg-black text-gray-300 min-h-screen flex flex-col items-center py-10 px-4">
@@ -60,14 +91,14 @@
             
             <div class="mb-5">
                 <span class="block text-xs text-gray-500 font-medium mb-2 uppercase">Prompt</span>
-                <div class="p-4 bg-black border border-gray-800 rounded-md text-sm text-gray-300 leading-relaxed italic">
+                <div class="p-4 bg-black border border-gray-800 rounded-md text-sm text-gray-300 leading-relaxed italic scrollable-block">
                     {{ initial_prompt }}
                 </div>
             </div>
             
             <div class="mb-5">
                 <span class="block text-xs text-gray-500 font-medium mb-2 uppercase">LLM Output</span>
-                <div class="p-4 bg-black border border-gray-800 rounded-md text-sm text-gray-400 leading-relaxed max-h-64 overflow-y-auto">
+                <div class="p-4 bg-black border border-gray-800 rounded-md text-sm text-gray-400 leading-relaxed scrollable-block">
                     {{ initial_output or '[No output generated]' }}
                 </div>
             </div>
@@ -84,14 +115,14 @@
             
             <div class="mb-5">
                 <span class="block text-xs text-gray-500 font-medium mb-2 uppercase">Optimized Prompt</span>
-                <div class="p-4 bg-black border border-gray-700 rounded-md text-sm text-gray-200 leading-relaxed font-mono">
+                <div class="p-4 bg-black border border-gray-700 rounded-md text-sm text-gray-200 leading-relaxed font-mono scrollable-block">
                     {{ final_prompt }}
                 </div>
             </div>
             
             <div class="mb-5">
                 <span class="block text-xs text-gray-500 font-medium mb-2 uppercase">LLM Output</span>
-                <div class="p-4 bg-black border border-gray-800 rounded-md text-sm text-gray-300 leading-relaxed max-h-64 overflow-y-auto">
+                <div class="p-4 bg-black border border-gray-800 rounded-md text-sm text-gray-300 leading-relaxed scrollable-block">
                     {{ final_output or '[No output generated]' }}
                 </div>
             </div>
@@ -109,22 +140,48 @@
             <div class="p-4 bg-[#0d0d0d] rounded-lg border border-gray-800">
                 <div class="text-sm text-gray-400 mb-1">Quality Imp.</div>
                 <div class="text-lg text-white">{{ "%+.4f"|format(quality_improvement_abs) }} ({{ "%+.1f"|format(quality_improvement_pct) }}%)</div>
+                {% if quality_improvement_abs > 0 %}
+                <div class="text-xs text-green-400 mt-1">Improved by {{ "%.4f"|format(quality_improvement_abs) }} ({{ "%.1f"|format(quality_improvement_pct) }}%)</div>
+                {% elif quality_improvement_abs < 0 %}
+                <div class="text-xs text-amber-300 mt-1">Reduced by {{ "%.4f"|format(-quality_improvement_abs) }} ({{ "%.1f"|format(-quality_improvement_pct) }}%)</div>
+                {% else %}
+                <div class="text-xs text-gray-400 mt-1">No change</div>
+                {% endif %}
             </div>
             <div class="p-4 bg-[#0d0d0d] rounded-lg border border-gray-800">
                 <div class="text-sm text-gray-400 mb-1">Token Reduction</div>
-                <div class="text-lg text-white">{{ "%+.0f"|format(token_reduction_abs) }} ({{ "%+.1f"|format(token_reduction_pct_total) }}%)</div>
+                <div class="text-lg text-white">{{ "%+.0f"|format(-token_reduction_abs) }} ({{ "%+.1f"|format(-token_reduction_pct_total) }}%)</div>
+                {% if token_reduction_abs > 0 %}
+                <div class="text-xs text-green-400 mt-1">Reduced by {{ "%.0f"|format(token_reduction_abs) }} ({{ "%.1f"|format(token_reduction_pct_total) }}%)</div>
+                {% elif token_reduction_abs < 0 %}
+                <div class="text-xs text-amber-300 mt-1">Increased by {{ "%.0f"|format(-token_reduction_abs) }} ({{ "%.1f"|format(-token_reduction_pct_total) }}%)</div>
+                {% else %}
+                <div class="text-xs text-gray-400 mt-1">No change</div>
+                {% endif %}
             </div>
             <div class="p-4 bg-[#0d0d0d] rounded-lg border border-gray-800">
                 <div class="text-sm text-gray-400 mb-1">Cost Reduction</div>
-                <div class="text-lg text-white">{{ "%+.2f"|format(cost_reduction_abs) }} ({{ "%+.1f"|format(cost_reduction_pct) }}%)</div>
+                <div class="text-lg text-white">{{ "%+.2f"|format(-cost_reduction_abs) }} ({{ "%+.1f"|format(-cost_reduction_pct) }}%)</div>
+                {% if cost_reduction_abs > 0 %}
+                <div class="text-xs text-green-400 mt-1">Reduced by {{ "%.2f"|format(cost_reduction_abs) }} ({{ "%.1f"|format(cost_reduction_pct) }}%)</div>
+                {% elif cost_reduction_abs < 0 %}
+                <div class="text-xs text-amber-300 mt-1">Increased by {{ "%.2f"|format(-cost_reduction_abs) }} ({{ "%.1f"|format(-cost_reduction_pct) }}%)</div>
+                {% else %}
+                <div class="text-xs text-gray-400 mt-1">No change</div>
+                {% endif %}
             </div>
         </div>
     </div>
 
     {% if used_fallback %}
     <div class="mt-6 p-4 bg-red-900/20 border border-red-500/30 rounded-lg text-sm text-red-200">
-        <strong>Offline Mode:</strong> API connection failed, so offline fallback outputs were used for this run.<br>
-        Reason: {{ fallback_reason or "unknown_connection_error" }} | Model: {{ llm_runtime.model_name }}
+        {% if offline_mode %}
+        <strong>Offline Mode:</strong> All LLM API calls failed, so fallback outputs were used for this run.<br>
+        {% else %}
+        <strong>Partial Fallback:</strong> Some LLM API calls failed, so fallback outputs were used for part of this run.<br>
+        {% endif %}
+        Reason: {{ fallback_reason or "unknown_connection_error" }}<br>
+        Endpoint: {{ llm_runtime.api_base_url }} | Model: {{ llm_runtime.model_name }} | Fallback calls: {{ fallback_calls }}/{{ llm_calls_attempted }}
     </div>
     {% endif %}
 

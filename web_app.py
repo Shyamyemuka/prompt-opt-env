@@ -50,13 +50,43 @@ def _first_env(*keys: str, default: str = "") -> str:
     return default
 
 
-API_BASE_URL: str = _first_env("API_BASE_URL", "OPENAI_BASE_URL", default="https://router.huggingface.co/v1/")
+def _normalize_base_url(url: str) -> str:
+    """Normalize endpoint URL and ensure trailing slash for client consistency."""
+    clean = (url or "").strip().strip("'").strip('"')
+    if clean and not clean.endswith("/"):
+        clean += "/"
+    return clean
+
+
+def _build_api_base_candidates(primary_url: str, fallback_url: str) -> list[str]:
+    """Build deduplicated endpoint candidates with safe defaults for HF router outages."""
+    candidates: list[str] = []
+    for raw_url in (primary_url, fallback_url):
+        normalized = _normalize_base_url(raw_url)
+        if normalized and normalized not in candidates:
+            candidates.append(normalized)
+
+    if "router.huggingface.co" in (primary_url or ""):
+        alt_hf = "https://api-inference.huggingface.co/v1/"
+        if alt_hf not in candidates:
+            candidates.append(alt_hf)
+
+    return candidates
+
+
+API_BASE_URL: str = _normalize_base_url(
+    _first_env("API_BASE_URL", "OPENAI_BASE_URL", default="https://router.huggingface.co/v1/")
+)
+API_BASE_URL_FALLBACK: str = _normalize_base_url(
+    _first_env("API_BASE_URL_FALLBACK", "OPENAI_BASE_URL_FALLBACK", default="")
+)
 MODEL_NAME: str = _first_env("MODEL_NAME", "OPENAI_MODEL", default="Qwen/Qwen2.5-72B-Instruct")
 HF_TOKEN: str = _first_env("HF_TOKEN", "OPENAI_API_KEY", "HUGGINGFACEHUB_API_TOKEN", default="")
 ALPHA: float = float(os.getenv("TOKEN_PENALTY_ALPHA", "0.02"))
 DONE_THRESHOLD: float = float(os.getenv("DONE_THRESHOLD", "0.85"))
 MAX_STEPS: int = int(os.getenv("MAX_STEPS", "7"))
-LLM_TIMEOUT_SECONDS: float = float(os.getenv("LLM_TIMEOUT_SECONDS", "10"))
+LLM_TIMEOUT_SECONDS: float = float(os.getenv("LLM_TIMEOUT_SECONDS", "45"))
+LLM_MAX_RETRIES: int = int(os.getenv("LLM_MAX_RETRIES", "2"))
 OUTPUT_TOKEN_COST: float = float(os.getenv("OUTPUT_TOKEN_COST", "1.0"))
 
 if not HF_TOKEN:
@@ -67,51 +97,93 @@ if any(
 ):
     print("[INFO] Proxy environment variables detected. OpenAI client uses direct connection (trust_env=False).")
 
-_CLIENT = None
+_CLIENTS: dict[str, OpenAI] = {}
+_API_BASE_URL_CANDIDATES: list[str] = _build_api_base_candidates(API_BASE_URL, API_BASE_URL_FALLBACK)
+if not _API_BASE_URL_CANDIDATES and API_BASE_URL:
+    _API_BASE_URL_CANDIDATES = [API_BASE_URL]
+_ACTIVE_API_BASE_URL: str = _API_BASE_URL_CANDIDATES[0] if _API_BASE_URL_CANDIDATES else API_BASE_URL
 _LAST_LLM_ERROR = ""
 _ROUGE = rouge_scorer.RougeScorer(["rougeL"], use_stemmer=True)
 
 
-def get_client():
-    """Lazy load OpenAI client."""
-    global _CLIENT
-    if _CLIENT is None and HF_TOKEN:
-        _CLIENT = OpenAI(
-            base_url=API_BASE_URL,
+def get_client(base_url: str | None = None):
+    """Lazy load OpenAI client per endpoint."""
+    target_base_url = _normalize_base_url(base_url or _ACTIVE_API_BASE_URL or API_BASE_URL)
+    if not HF_TOKEN or not target_base_url:
+        return None
+    if target_base_url not in _CLIENTS:
+        _CLIENTS[target_base_url] = OpenAI(
+            base_url=target_base_url,
             api_key=HF_TOKEN,
-            max_retries=0,
+            max_retries=LLM_MAX_RETRIES,
             # Ignore broken shell proxy env vars so API keys/base URL can work directly.
-            http_client=httpx.Client(trust_env=False),
+            http_client=httpx.Client(trust_env=False, timeout=LLM_TIMEOUT_SECONDS + 5),
         )
-    return _CLIENT
+    return _CLIENTS[target_base_url]
+
+
+def _is_retryable_connection_error(exc: Exception) -> bool:
+    """Retry transient transport/server issues, but fail fast on hard API errors."""
+    error_name = type(exc).__name__.lower()
+    if any(token in error_name for token in ("connection", "timeout", "rate", "server")):
+        return True
+    status_code = getattr(exc, "status_code", None)
+    return isinstance(status_code, int) and status_code >= 500
+
+
+def _ordered_api_base_urls() -> list[str]:
+    """Try last-known good endpoint first, then remaining configured candidates."""
+    ordered: list[str] = []
+    for raw_url in [_ACTIVE_API_BASE_URL, *_API_BASE_URL_CANDIDATES]:
+        normalized = _normalize_base_url(raw_url)
+        if normalized and normalized not in ordered:
+            ordered.append(normalized)
+    return ordered
 
 
 def call_llm(prompt: str, max_tokens: int = 300) -> str:
     """Call LLM with the prompt and return output."""
-    global _LAST_LLM_ERROR
-    client = get_client()
-    if not client:
+    global _LAST_LLM_ERROR, _ACTIVE_API_BASE_URL
+    if not HF_TOKEN:
         _LAST_LLM_ERROR = "missing_api_key"
         return ""
-    try:
-        r = client.chat.completions.create(
-            model=MODEL_NAME,
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=max_tokens, temperature=0.3, timeout=LLM_TIMEOUT_SECONDS,
-        )
-        _LAST_LLM_ERROR = ""
-        return r.choices[0].message.content or ""
-    except Exception as exc:
-        _LAST_LLM_ERROR = f"{type(exc).__name__}: {exc}"
-        return ""
+
+    errors: list[str] = []
+    for base_url in _ordered_api_base_urls():
+        client = get_client(base_url)
+        if not client:
+            continue
+        try:
+            r = client.chat.completions.create(
+                model=MODEL_NAME,
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=max_tokens,
+                temperature=0.3,
+                timeout=LLM_TIMEOUT_SECONDS,
+            )
+            _ACTIVE_API_BASE_URL = base_url
+            _LAST_LLM_ERROR = ""
+            return r.choices[0].message.content or ""
+        except Exception as exc:
+            error_text = f"{base_url} -> {type(exc).__name__}: {exc}"
+            errors.append(error_text)
+            if not _is_retryable_connection_error(exc):
+                _LAST_LLM_ERROR = error_text[:500]
+                return ""
+
+    _LAST_LLM_ERROR = (" | ".join(errors) if errors else "unknown_connection_error")[:500]
+    return ""
 
 
 def get_llm_runtime_status() -> dict[str, Any]:
     """Expose sanitized runtime status for debugging connection/key issues."""
     return {
-        "api_base_url": API_BASE_URL,
+        "api_base_url": _ACTIVE_API_BASE_URL or API_BASE_URL,
+        "api_base_candidates": _API_BASE_URL_CANDIDATES,
         "model_name": MODEL_NAME,
         "token_present": bool(HF_TOKEN),
+        "llm_timeout_seconds": LLM_TIMEOUT_SECONDS,
+        "llm_max_retries": LLM_MAX_RETRIES,
         "proxy_env_present": any(
             bool(os.getenv(name))
             for name in (
@@ -416,15 +488,26 @@ def optimize_prompt_with_state(state: dict) -> dict:
     input_data = (state.get("input", "") or "").strip()
     goal = state.get("goal", "Balanced")
 
-    runtime_status = get_llm_runtime_status()
-
     # Generate a reference answer (ground truth)
     used_fallback = False
+    fallback_reasons: list[str] = []
+    llm_calls_attempted = 0
+    fallback_calls = 0
+
+    def record_fallback(default_reason: str) -> None:
+        nonlocal used_fallback, fallback_calls
+        used_fallback = True
+        fallback_calls += 1
+        reason = (_LAST_LLM_ERROR or default_reason).strip()
+        if reason and reason not in fallback_reasons:
+            fallback_reasons.append(reason)
+
     output_token_cap = response_token_limit(task, goal)
     expert_prompt = build_reference_prompt(task, input_data)
+    llm_calls_attempted += 1
     reference_answer = call_llm(expert_prompt, max_tokens=min(220, output_token_cap + 80))
     if not reference_answer:
-        used_fallback = True
+        record_fallback("reference_generation_failed")
         reference_answer = fallback_output(task, prompt, input_data, is_reference=True)
 
     # Adjust token budget based on goal
@@ -436,12 +519,13 @@ def optimize_prompt_with_state(state: dict) -> dict:
 
     # Initialize current state variables
     current_prompt = prompt
+    llm_calls_attempted += 1
     current_output = call_llm(
         build_inference_prompt(task, current_prompt, input_data),
         max_tokens=output_token_cap,
     )
     if not current_output:
-        used_fallback = True
+        record_fallback("baseline_generation_failed")
         current_output = fallback_output(task, current_prompt, input_data)
     current_score = score_output(current_output, reference_answer, task=task)
     current_tokens = count_tokens(current_prompt)
@@ -494,12 +578,13 @@ def optimize_prompt_with_state(state: dict) -> dict:
             termination_reason = "budget_exceeded"
             break
 
+        llm_calls_attempted += 1
         new_output = call_llm(
             build_inference_prompt(task, new_prompt, input_data),
             max_tokens=output_token_cap,
         )
         if not new_output:
-            used_fallback = True
+            record_fallback(f"step_{step + 1}_generation_failed")
             new_output = fallback_output(task, new_prompt, input_data)
         new_score = score_output(new_output, reference_answer, task=task)
 
@@ -557,6 +642,9 @@ def optimize_prompt_with_state(state: dict) -> dict:
     quality_improvement_pct = (
         (quality_improvement_abs / initial_score) * 100.0 if initial_score > 0 else quality_improvement_abs * 100.0
     )
+    runtime_status = get_llm_runtime_status()
+    fallback_reason = " | ".join(fallback_reasons)
+    offline_mode = bool(used_fallback and llm_calls_attempted > 0 and fallback_calls == llm_calls_attempted)
 
     return {
         "task": task,
@@ -589,7 +677,10 @@ def optimize_prompt_with_state(state: dict) -> dict:
         "total_reward": total_reward,
         "termination_reason": termination_reason,
         "used_fallback": used_fallback,
-        "fallback_reason": _LAST_LLM_ERROR,
+        "offline_mode": offline_mode,
+        "fallback_calls": fallback_calls,
+        "llm_calls_attempted": llm_calls_attempted,
+        "fallback_reason": fallback_reason or _LAST_LLM_ERROR,
         "llm_runtime": runtime_status,
     }
 
@@ -829,6 +920,29 @@ def _write_landing_html(tpl_dir: str):
           },
         }
       </script>
+<style>
+
+    /* Custom Scrollbar */
+    ::-webkit-scrollbar {
+      width: 8px;
+      height: 8px;
+    }
+    ::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: rgba(255, 255, 255, 0.15);
+      border-radius: 10px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: rgba(255, 255, 255, 0.25);
+    }
+    * {
+      scrollbar-width: thin;
+      scrollbar-color: rgba(255, 255, 255, 0.15) transparent;
+    }
+
+</style>
 </head>
 <body class="font-body selection:bg-primary-container selection:text-white">
 <!-- Ambient Visuals -->
@@ -1031,6 +1145,29 @@ def _write_index_html(tpl_dir: str):
     @keyframes spin { 100% { transform: rotate(360deg); } }
     .hidden { display: none !important; }
 </style>
+<style>
+
+    /* Custom Scrollbar */
+    ::-webkit-scrollbar {
+      width: 8px;
+      height: 8px;
+    }
+    ::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: rgba(255, 255, 255, 0.15);
+      border-radius: 10px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: rgba(255, 255, 255, 0.25);
+    }
+    * {
+      scrollbar-width: thin;
+      scrollbar-color: rgba(255, 255, 255, 0.15) transparent;
+    }
+
+</style>
 </head>
 <body class="bg-black text-gray-300 min-h-screen flex flex-col items-center justify-center p-4">
 <!-- Back to Home -->
@@ -1204,7 +1341,38 @@ def _write_results_html(tpl_dir: str):
       border: 1px solid rgba(255, 255, 255, 0.1);
       height: 100%;
     }
+    .scrollable-block {
+      min-height: 8rem;
+      max-height: 20rem;
+      overflow: auto;
+      white-space: pre-wrap;
+      word-break: break-word;
+      scrollbar-gutter: stable;
+    }
     @keyframes spin { 100% { transform: rotate(360deg); } }
+</style>
+<style>
+
+    /* Custom Scrollbar */
+    ::-webkit-scrollbar {
+      width: 8px;
+      height: 8px;
+    }
+    ::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: rgba(255, 255, 255, 0.15);
+      border-radius: 10px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: rgba(255, 255, 255, 0.25);
+    }
+    * {
+      scrollbar-width: thin;
+      scrollbar-color: rgba(255, 255, 255, 0.15) transparent;
+    }
+
 </style>
 </head>
 <body class="bg-black text-gray-300 min-h-screen flex flex-col items-center py-10 px-4">
@@ -1231,14 +1399,14 @@ def _write_results_html(tpl_dir: str):
             
             <div class="mb-5">
                 <span class="block text-xs text-gray-500 font-medium mb-2 uppercase">Prompt</span>
-                <div class="p-4 bg-black border border-gray-800 rounded-md text-sm text-gray-300 leading-relaxed italic">
+                <div class="p-4 bg-black border border-gray-800 rounded-md text-sm text-gray-300 leading-relaxed italic scrollable-block">
                     {{ initial_prompt }}
                 </div>
             </div>
             
             <div class="mb-5">
                 <span class="block text-xs text-gray-500 font-medium mb-2 uppercase">LLM Output</span>
-                <div class="p-4 bg-black border border-gray-800 rounded-md text-sm text-gray-400 leading-relaxed max-h-64 overflow-y-auto">
+                <div class="p-4 bg-black border border-gray-800 rounded-md text-sm text-gray-400 leading-relaxed scrollable-block">
                     {{ initial_output or '[No output generated]' }}
                 </div>
             </div>
@@ -1255,14 +1423,14 @@ def _write_results_html(tpl_dir: str):
             
             <div class="mb-5">
                 <span class="block text-xs text-gray-500 font-medium mb-2 uppercase">Optimized Prompt</span>
-                <div class="p-4 bg-black border border-gray-700 rounded-md text-sm text-gray-200 leading-relaxed font-mono">
+                <div class="p-4 bg-black border border-gray-700 rounded-md text-sm text-gray-200 leading-relaxed font-mono scrollable-block">
                     {{ final_prompt }}
                 </div>
             </div>
             
             <div class="mb-5">
                 <span class="block text-xs text-gray-500 font-medium mb-2 uppercase">LLM Output</span>
-                <div class="p-4 bg-black border border-gray-800 rounded-md text-sm text-gray-300 leading-relaxed max-h-64 overflow-y-auto">
+                <div class="p-4 bg-black border border-gray-800 rounded-md text-sm text-gray-300 leading-relaxed scrollable-block">
                     {{ final_output or '[No output generated]' }}
                 </div>
             </div>
@@ -1280,22 +1448,48 @@ def _write_results_html(tpl_dir: str):
             <div class="p-4 bg-[#0d0d0d] rounded-lg border border-gray-800">
                 <div class="text-sm text-gray-400 mb-1">Quality Imp.</div>
                 <div class="text-lg text-white">{{ "%+.4f"|format(quality_improvement_abs) }} ({{ "%+.1f"|format(quality_improvement_pct) }}%)</div>
+                {% if quality_improvement_abs > 0 %}
+                <div class="text-xs text-green-400 mt-1">Improved by {{ "%.4f"|format(quality_improvement_abs) }} ({{ "%.1f"|format(quality_improvement_pct) }}%)</div>
+                {% elif quality_improvement_abs < 0 %}
+                <div class="text-xs text-amber-300 mt-1">Reduced by {{ "%.4f"|format(-quality_improvement_abs) }} ({{ "%.1f"|format(-quality_improvement_pct) }}%)</div>
+                {% else %}
+                <div class="text-xs text-gray-400 mt-1">No change</div>
+                {% endif %}
             </div>
             <div class="p-4 bg-[#0d0d0d] rounded-lg border border-gray-800">
                 <div class="text-sm text-gray-400 mb-1">Token Reduction</div>
-                <div class="text-lg text-white">{{ "%+.0f"|format(token_reduction_abs) }} ({{ "%+.1f"|format(token_reduction_pct_total) }}%)</div>
+                <div class="text-lg text-white">{{ "%+.0f"|format(-token_reduction_abs) }} ({{ "%+.1f"|format(-token_reduction_pct_total) }}%)</div>
+                {% if token_reduction_abs > 0 %}
+                <div class="text-xs text-green-400 mt-1">Reduced by {{ "%.0f"|format(token_reduction_abs) }} ({{ "%.1f"|format(token_reduction_pct_total) }}%)</div>
+                {% elif token_reduction_abs < 0 %}
+                <div class="text-xs text-amber-300 mt-1">Increased by {{ "%.0f"|format(-token_reduction_abs) }} ({{ "%.1f"|format(-token_reduction_pct_total) }}%)</div>
+                {% else %}
+                <div class="text-xs text-gray-400 mt-1">No change</div>
+                {% endif %}
             </div>
             <div class="p-4 bg-[#0d0d0d] rounded-lg border border-gray-800">
                 <div class="text-sm text-gray-400 mb-1">Cost Reduction</div>
-                <div class="text-lg text-white">{{ "%+.2f"|format(cost_reduction_abs) }} ({{ "%+.1f"|format(cost_reduction_pct) }}%)</div>
+                <div class="text-lg text-white">{{ "%+.2f"|format(-cost_reduction_abs) }} ({{ "%+.1f"|format(-cost_reduction_pct) }}%)</div>
+                {% if cost_reduction_abs > 0 %}
+                <div class="text-xs text-green-400 mt-1">Reduced by {{ "%.2f"|format(cost_reduction_abs) }} ({{ "%.1f"|format(cost_reduction_pct) }}%)</div>
+                {% elif cost_reduction_abs < 0 %}
+                <div class="text-xs text-amber-300 mt-1">Increased by {{ "%.2f"|format(-cost_reduction_abs) }} ({{ "%.1f"|format(-cost_reduction_pct) }}%)</div>
+                {% else %}
+                <div class="text-xs text-gray-400 mt-1">No change</div>
+                {% endif %}
             </div>
         </div>
     </div>
 
     {% if used_fallback %}
     <div class="mt-6 p-4 bg-red-900/20 border border-red-500/30 rounded-lg text-sm text-red-200">
-        <strong>Offline Mode:</strong> API connection failed, so offline fallback outputs were used for this run.<br>
-        Reason: {{ fallback_reason or "unknown_connection_error" }} | Model: {{ llm_runtime.model_name }}
+        {% if offline_mode %}
+        <strong>Offline Mode:</strong> All LLM API calls failed, so fallback outputs were used for this run.<br>
+        {% else %}
+        <strong>Partial Fallback:</strong> Some LLM API calls failed, so fallback outputs were used for part of this run.<br>
+        {% endif %}
+        Reason: {{ fallback_reason or "unknown_connection_error" }}<br>
+        Endpoint: {{ llm_runtime.api_base_url }} | Model: {{ llm_runtime.model_name }} | Fallback calls: {{ fallback_calls }}/{{ llm_calls_attempted }}
     </div>
     {% endif %}
 

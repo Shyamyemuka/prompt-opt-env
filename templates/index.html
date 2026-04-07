@@ -35,6 +35,29 @@
     @keyframes spin { 100% { transform: rotate(360deg); } }
     .hidden { display: none !important; }
 </style>
+<style>
+
+    /* Custom Scrollbar */
+    ::-webkit-scrollbar {
+      width: 8px;
+      height: 8px;
+    }
+    ::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: rgba(255, 255, 255, 0.15);
+      border-radius: 10px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: rgba(255, 255, 255, 0.25);
+    }
+    * {
+      scrollbar-width: thin;
+      scrollbar-color: rgba(255, 255, 255, 0.15) transparent;
+    }
+
+</style>
 </head>
 <body class="bg-black text-gray-300 min-h-screen flex flex-col items-center justify-center p-4">
 <!-- Back to Home -->
