@@ -1,126 +1,135 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Optimization Results - PromptOptEnv</title>
-    <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh;
-            padding: 40px 20px;
-            color: #333;
-        }
-        .container { max-width: 700px; margin: 0 auto; }
-        .card {
-            background: white; border-radius: 12px; padding: 40px;
-            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
-            font-size: 16px; line-height: 1.6;
-        }
-        .task-header {
-            font-size: 20px; font-weight: bold; margin-bottom: 25px;
-        }
-        hr {
-            border: 0; height: 1px; background: #ddd; margin: 30px 0;
-        }
-        .label {
-            font-weight: bold; margin-bottom: 5px;
-        }
-        .quote {
-            font-style: italic; color: #555; margin-bottom: 20px;
-            background: #f9f9f9; padding: 10px; border-left: 4px solid #667eea;
-        }
-        .success-text {
-            color: #2e7d32; font-weight: bold; margin-top: 20px;
-        }
-        .metrics-block {
-            margin-top: 18px;
-            padding: 12px;
-            background: #f7f9ff;
-            border: 1px solid #d7deef;
-            border-radius: 10px;
-        }
-        .metric-line {
-            margin: 6px 0;
-            font-weight: 600;
-            color: #2f3b52;
-        }
-        .info-text {
-            color: #5f6368; margin-top: 14px; font-size: 14px;
-        }
-        .debug-box {
-            margin-top: 10px;
-            padding: 10px;
-            background: #f4f6fb;
-            border: 1px solid #dbe1f0;
-            border-radius: 8px;
-            color: #3f4a5f;
-            font-size: 13px;
-            line-height: 1.45;
-        }
-        .back-btn {
-            display: inline-block; margin-top: 30px; padding: 12px 30px;
-            background: white; color: #667eea; text-decoration: none;
-            border-radius: 8px; font-weight: 600; box-shadow: 0 4px 15px rgba(0,0,0,0.1);
-        }
-    </style>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Optimization Results - PromptOptEnv</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style data-purpose="custom-fonts">
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+    body { font-family: 'Inter', sans-serif; }
+</style>
+<style data-purpose="custom-effects">
+    .glow-border {
+      position: relative;
+      border-radius: 14px;
+      z-index: 1;
+      overflow: hidden;
+      padding: 3px;
+    }
+    .glow-border::before {
+      content: "";
+      position: absolute;
+      top: -50%; left: -50%; bottom: -50%; right: -50%;
+      background: conic-gradient(transparent, transparent, transparent, #4d79ff, #ff4d4d);
+      z-index: -1;
+      animation: spin 10s linear infinite;
+    }
+    .glow-border-inner {
+      background: #050505;
+      border-radius: 12px;
+      position: relative;
+      z-index: 2;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      height: 100%;
+    }
+    @keyframes spin { 100% { transform: rotate(360deg); } }
+</style>
 </head>
-<body>
-    <div class="container">
+<body class="bg-black text-gray-300 min-h-screen flex flex-col items-center py-10 px-4">
+<!-- Back to Home -->
+<a href="/" class="absolute top-6 left-6 flex items-center gap-2 text-gray-400 hover:text-white transition-colors group z-50">
+    <svg class="h-5 w-5 transform group-hover:-translate-x-1 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M10 19l-7-7m0 0l7-7m-7 7h18" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg>
+    <span class="text-sm font-medium">Back to Home</span>
+</a>
+
+
+<main class="w-full max-w-5xl glow-border">
+<div class="glow-border-inner p-8 shadow-2xl">
+    <div class="flex items-center justify-between xl:mb-8 mb-6">
+        <h2 class="text-2xl font-bold text-white tracking-tight">Optimization Results: {{ task }}</h2>
+        <a href="/app" class="px-4 py-2 rounded-full border border-gray-600 text-sm font-medium hover:bg-gray-800 transition-colors">&larr; Optimize Another</a>
+    </div>
+
+    <!-- Before / After split -->
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
         
-        <div class="card">
-            <div class="task-header">Task: {{ task }}</div>
+        <!-- BEFORE -->
+        <div class="p-6 bg-[#0a0a0a] rounded-xl border border-gray-800">
+            <h3 class="text-red-400 font-semibold mb-4 text-sm uppercase tracking-wider">Before (Baseline)</h3>
             
-            <div class="label">Initial Prompt:</div>
-            <div class="quote">{{ initial_prompt }}</div>
-            
-            <div class="label">Output:</div>
-            <div class="quote">{{ initial_output or '[No output generated]' }}</div>
-            
-            <div class="label" style="margin-bottom: 30px;">Reward: {{ "%.2f"|format(initial_reward) }}</div>
-            
-            <hr>
-            
-            <div class="task-header">After Optimization ({{ steps_taken }} steps):</div>
-            
-            <div class="label">Prompt:</div>
-            <div class="quote">{{ final_prompt }}</div>
-            
-            <div class="label">Output:</div>
-            <div class="quote">{{ final_output or '[No output generated]' }}</div>
-            
-            <div class="label">Reward: {{ "%.2f"|format(final_reward) }}</div>
-            <div class="label">Total Episode Reward: {{ "%.2f"|format(total_reward) }}</div>
-            
-            <div class="metrics-block">
-                <div class="metric-line">
-                    Token Reduction: {{ "%+.0f"|format(token_reduction_abs) }} ({{ "%+.1f"|format(token_reduction_pct_total) }}%)
-                </div>
-                <div class="metric-line">
-                    Cost Reduction: {{ "%+.2f"|format(cost_reduction_abs) }} ({{ "%+.1f"|format(cost_reduction_pct) }}%)
-                </div>
-                <div class="metric-line">
-                    Quality Improvement: {{ "%+.4f"|format(quality_improvement_abs) }} ({{ "%+.1f"|format(quality_improvement_pct) }}%)
+            <div class="mb-5">
+                <span class="block text-xs text-gray-500 font-medium mb-2 uppercase">Prompt</span>
+                <div class="p-4 bg-black border border-gray-800 rounded-md text-sm text-gray-300 leading-relaxed italic">
+                    {{ initial_prompt }}
                 </div>
             </div>
-            {% if used_fallback %}
-            <div class="info-text">
-                API connection failed, so offline fallback outputs were used for this run.
+            
+            <div class="mb-5">
+                <span class="block text-xs text-gray-500 font-medium mb-2 uppercase">LLM Output</span>
+                <div class="p-4 bg-black border border-gray-800 rounded-md text-sm text-gray-400 leading-relaxed max-h-64 overflow-y-auto">
+                    {{ initial_output or '[No output generated]' }}
+                </div>
             </div>
-            <div class="debug-box">
-                <div>Reason: {{ fallback_reason or "unknown_connection_error" }}</div>
-                <div>Token detected: {{ "yes" if llm_runtime.token_present else "no" }}</div>
-                <div>Model: {{ llm_runtime.model_name }}</div>
-                <div>Base URL: {{ llm_runtime.api_base_url }}</div>
+            
+            <div>
+                <span class="block text-xs text-gray-500 font-medium mb-2 uppercase">Reward Score</span>
+                <div class="text-xl text-white font-bold">{{ "%.2f"|format(initial_reward) }}</div>
             </div>
-            {% endif %}
         </div>
 
-        <div style="text-align: center;">
-            <a href="/" class="back-btn">&#8592; Optimize Another</a>
+        <!-- AFTER -->
+        <div class="p-6 bg-[#0a0a0a] rounded-xl border border-gray-800 relative shadow-[0_0_25px_rgba(77,121,255,0.05)]">
+            <h3 class="text-blue-400 font-semibold mb-4 text-sm uppercase tracking-wider">After (Optimized - {{ steps_taken }} steps)</h3>
+            
+            <div class="mb-5">
+                <span class="block text-xs text-gray-500 font-medium mb-2 uppercase">Optimized Prompt</span>
+                <div class="p-4 bg-black border border-gray-700 rounded-md text-sm text-gray-200 leading-relaxed font-mono">
+                    {{ final_prompt }}
+                </div>
+            </div>
+            
+            <div class="mb-5">
+                <span class="block text-xs text-gray-500 font-medium mb-2 uppercase">LLM Output</span>
+                <div class="p-4 bg-black border border-gray-800 rounded-md text-sm text-gray-300 leading-relaxed max-h-64 overflow-y-auto">
+                    {{ final_output or '[No output generated]' }}
+                </div>
+            </div>
+            
+            <div>
+                <span class="block text-xs text-gray-500 font-medium mb-2 uppercase">Reward Score</span>
+                <div class="text-xl text-white font-bold">{{ "%.2f"|format(final_reward) }}</div>
+            </div>
         </div>
     </div>
+    
+    <div class="mt-8 pt-6 border-t border-gray-800">
+        <h3 class="text-xs text-gray-500 font-semibold mb-4 uppercase tracking-wider">Episode Metrics</h3>
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div class="p-4 bg-[#0d0d0d] rounded-lg border border-gray-800">
+                <div class="text-sm text-gray-400 mb-1">Quality Imp.</div>
+                <div class="text-lg text-white">{{ "%+.4f"|format(quality_improvement_abs) }} ({{ "%+.1f"|format(quality_improvement_pct) }}%)</div>
+            </div>
+            <div class="p-4 bg-[#0d0d0d] rounded-lg border border-gray-800">
+                <div class="text-sm text-gray-400 mb-1">Token Reduction</div>
+                <div class="text-lg text-white">{{ "%+.0f"|format(token_reduction_abs) }} ({{ "%+.1f"|format(token_reduction_pct_total) }}%)</div>
+            </div>
+            <div class="p-4 bg-[#0d0d0d] rounded-lg border border-gray-800">
+                <div class="text-sm text-gray-400 mb-1">Cost Reduction</div>
+                <div class="text-lg text-white">{{ "%+.2f"|format(cost_reduction_abs) }} ({{ "%+.1f"|format(cost_reduction_pct) }}%)</div>
+            </div>
+        </div>
+    </div>
+
+    {% if used_fallback %}
+    <div class="mt-6 p-4 bg-red-900/20 border border-red-500/30 rounded-lg text-sm text-red-200">
+        <strong>Offline Mode:</strong> API connection failed, so offline fallback outputs were used for this run.<br>
+        Reason: {{ fallback_reason or "unknown_connection_error" }} | Model: {{ llm_runtime.model_name }}
+    </div>
+    {% endif %}
+
+</div>
+</main>
+
 </body>
 </html>

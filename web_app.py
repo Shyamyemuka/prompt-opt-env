@@ -612,6 +612,7 @@ def _write_templates():
     """Write HTML templates to disk (always, so they stay in sync)."""
     tpl_dir = os.path.join(BASE_DIR, "templates")
     os.makedirs(tpl_dir, exist_ok=True)
+    _write_landing_html(tpl_dir)
     _write_index_html(tpl_dir)
     _write_results_html(tpl_dir)
 
@@ -623,8 +624,14 @@ templates = Jinja2Templates(directory=TPL_DIR)
 
 
 @app.get("/", response_class=HTMLResponse)
+async def landing(request: Request):
+    """Render the landing page."""
+    return templates.TemplateResponse("landing.html", {"request": request})
+
+
+@app.get("/app", response_class=HTMLResponse)
 async def home(request: Request):
-    """Render the main page."""
+    """Render the main optimizer form page."""
     return templates.TemplateResponse("index.html", {"request": request})
 
 
@@ -641,22 +648,16 @@ DEFAULT_PROMPTS = {
 async def optimize(
     request: Request,
     task: str = Form("Summarization"),
-    input_text: str = Form(""),
-    context: str = Form(""),
-    question: str = Form(""),
-    user_prompt: str = Form(""),
-    prompt: str = Form(""),
-    goal: str = Form("Balanced")
+    input_text: str = Form(None, alias="input-text"),
+    context: str = Form(None),
+    question: str = Form(None),
+    user_prompt: str = Form(None, alias="initial-prompt"),
+    goal: str = Form("Balanced", alias="optimization-goal")
 ):
     """Handle optimization form submission with structured task input."""
-
-    # Backward compatibility:
-    # - accept legacy `prompt` field used by older UI versions
-    # - default unknown/missing task to Summarization
     selected_task = task if task in DEFAULT_PROMPTS else "Summarization"
-    provided_prompt = user_prompt.strip() if user_prompt.strip() else prompt.strip()
+    provided_prompt = (user_prompt or "").strip()
 
-    # Construct state object
     state = {
         "task": selected_task,
         "input": "",
@@ -664,13 +665,15 @@ async def optimize(
         "goal": goal
     }
 
-    # Process input based on task
     if selected_task == "Question Answering":
-        state["input"] = f"Context: {context}\nQuestion: {question}" if context or question else ""
+        if not context and not question:
+            # Fallback if UI misbehaves
+            state["input"] = input_text or ""
+        else:
+            state["input"] = f"Context: {context or ''}\nQuestion: {question or ''}"
     else:
-        state["input"] = input_text
+        state["input"] = input_text or ""
 
-    # Pass state to optimizer (using existing backend logic)
     results = optimize_prompt_with_state(state)
     return templates.TemplateResponse("results.html", {
         "request": request,
@@ -678,347 +681,636 @@ async def optimize(
     })
 
 
-def _write_index_html(tpl_dir: str):
-    """Write index.html into tpl_dir."""
-    index_html = '''<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>PromptOptEnv - RL Prompt Optimizer</title>
-    <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
+def _write_landing_html(tpl_dir: str):
+    landing_html = """<!DOCTYPE html>
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>PromptOptEnv - RL Prompt Optimization</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&amp;family=Inter:wght@300;400;500;600&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<style>
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh;
-            padding: 40px 20px;
+            background-color: #000000;
+            color: #e2e2e2;
+            overflow-x: hidden;
         }
-        .container {
-            max-width: 800px;
-            margin: 0 auto;
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 300, 'GRAD' 0, 'opsz' 24;
         }
-        h1 {
-            color: white;
-            text-align: center;
-            margin-bottom: 10px;
-            font-size: 2.5em;
+        /* Kinetic Void Background Orbs */
+        .void-orb {
+            position: absolute;
+            filter: blur(120px);
+            z-index: -1;
+            opacity: 0.15;
+            border-radius: 50%;
         }
-        .subtitle {
-            color: rgba(255,255,255,0.8);
-            text-align: center;
-            margin-bottom: 30px;
+        .orb-primary { background: #ff5708; width: 600px; height: 600px; top: -200px; right: -100px; }
+        .orb-secondary { background: #0055ff; width: 500px; height: 500px; bottom: -100px; left: -100px; }
+        
+        .glass-card {
+            background: rgba(27, 27, 27, 0.4);
+            backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.05);
         }
-        .card {
-            background: white;
-            border-radius: 16px;
-            padding: 30px;
-            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+        
+        .kinetic-glow-border {
+            position: relative;
+            background: #ff5708;
+            transition: all 0.3s ease;
         }
-        .form-group {
-            margin-bottom: 20px;
+        .kinetic-glow-border::before {
+            content: '';
+            position: absolute;
+            inset: -2px;
+            background: conic-gradient(from 0deg, #ff5708, #0055ff, #ff5708);
+            border-radius: inherit;
+            z-index: -1;
+            animation: rotate-glow 8s linear infinite;
         }
-        label {
-            display: block;
-            margin-bottom: 8px;
-            font-weight: 600;
-            color: #333;
+
+        @keyframes rotate-glow {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
         }
-        textarea, input[type="text"], select {
-            width: 100%;
-            padding: 12px;
-            border: 2px solid #e0e0e0;
-            border-radius: 8px;
-            font-size: 16px;
-            transition: border-color 0.3s;
-            background: white;
+    
+    .glow-pill {
+      position: relative;
+      border-radius: 999px;
+      z-index: 1;
+      overflow: hidden;
+      padding: 2px;
+    }
+    .glow-pill::before {
+      content: "";
+      position: absolute;
+      top: -200%; left: -50%; bottom: -200%; right: -50%;
+      background: conic-gradient(transparent, transparent, transparent, #4d79ff, #ff4d4d);
+      z-index: -1;
+      animation: rotate-glow 4s linear infinite;
+    }
+    .glow-pill-inner {
+      background: #050505;
+      border-radius: 999px;
+      position: relative;
+      z-index: 2;
+      height: 100%;
+      cursor: pointer;
+    }
+</style>
+<script id="tailwind-config">
+        tailwind.config = {
+          darkMode: "class",
+          theme: {
+            extend: {
+              "colors": {
+                      "tertiary-container": "#0494fc",
+                      "on-secondary-container": "#e4e7ff",
+                      "inverse-on-surface": "#303030",
+                      "on-error": "#690005",
+                      "inverse-surface": "#e2e2e2",
+                      "surface-container-lowest": "#0e0e0e",
+                      "on-primary": "#5c1900",
+                      "on-surface-variant": "#e5beb2",
+                      "secondary-fixed": "#dce1ff",
+                      "tertiary-fixed": "#d2e4ff",
+                      "secondary": "#b6c4ff",
+                      "inverse-primary": "#aa3600",
+                      "tertiary": "#a1c9ff",
+                      "on-tertiary-fixed": "#001c37",
+                      "surface-dim": "#131313",
+                      "secondary-fixed-dim": "#b6c4ff",
+                      "error-container": "#93000a",
+                      "primary-fixed": "#ffdbcf",
+                      "surface-container": "#1f1f1f",
+                      "outline-variant": "#5c4037",
+                      "on-tertiary": "#00325a",
+                      "on-secondary": "#002780",
+                      "on-primary-container": "#511500",
+                      "on-tertiary-fixed-variant": "#004880",
+                      "surface-container-low": "#1b1b1b",
+                      "surface-container-high": "#2a2a2a",
+                      "on-error-container": "#ffdad6",
+                      "on-primary-fixed": "#390c00",
+                      "tertiary-fixed-dim": "#a1c9ff",
+                      "surface-bright": "#393939",
+                      "background": "#131313",
+                      "error": "#ffb4ab",
+                      "primary-fixed-dim": "#ffb59c",
+                      "surface-tint": "#ffb59c",
+                      "primary-container": "#ff5708",
+                      "on-surface": "#e2e2e2",
+                      "on-secondary-fixed-variant": "#0039b3",
+                      "on-secondary-fixed": "#001551",
+                      "on-primary-fixed-variant": "#822700",
+                      "surface-container-highest": "#353535",
+                      "surface": "#131313",
+                      "on-tertiary-container": "#002b4f",
+                      "secondary-container": "#0356ff",
+                      "on-background": "#e2e2e2",
+                      "outline": "#ac897e",
+                      "surface-variant": "#353535",
+                      "primary": "#ffb59c"
+              },
+              "borderRadius": {
+                      "DEFAULT": "0.125rem",
+                      "lg": "0.25rem",
+                      "xl": "0.5rem",
+                      "full": "0.75rem"
+              },
+              "fontFamily": {
+                      "headline": ["Space Grotesk"],
+                      "body": ["Inter"],
+                      "label": ["Inter"]
+              }
+            },
+          },
         }
-        textarea:focus, input[type="text"]:focus, select:focus {
-            outline: none;
-            border-color: #667eea;
-        }
-        textarea { min-height: 100px; resize: vertical; }
-        .hint {
-            font-size: 13px;
-            color: #666;
-            margin-top: 5px;
-        }
-        button {
-            width: 100%;
-            padding: 15px;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            border: none;
-            border-radius: 8px;
-            font-size: 18px;
-            font-weight: 600;
-            cursor: pointer;
-            transition: transform 0.2s, box-shadow 0.2s;
-        }
-        button:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 5px 20px rgba(102, 126, 234, 0.4);
-        }
-        .optional-fields {
-            margin-top: 20px;
-            padding-top: 20px;
-            border-top: 1px solid #eee;
-        }
-        .optional-title {
-            color: #666;
-            font-size: 14px;
-            margin-bottom: 15px;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-        }
-        .hidden {
-            display: none;
-        }
-    </style>
+      </script>
 </head>
-<body>
-    <div class="container">
-        <h1>PromptOptEnv</h1>
-        <p class="subtitle">RL-Powered Prompt Optimization with Cost Awareness</p>
-
-        <div class="card">
-            <form action="/optimize" method="post">
-                <div class="form-group">
-                    <label for="task">Select Task</label>
-                    <select name="task" id="task">
-                        <option value="Summarization">Summarization</option>
-                        <option value="Question Answering">Question Answering</option>
-                        <option value="Paraphrasing">Paraphrasing</option>
-                        <option value="Instruction Following">Instruction Following</option>
-                    </select>
-                </div>
-
-                <div class="form-group" id="generic-input-group">
-                    <label for="input_text" id="generic-input-label">Input Text</label>
-                    <textarea name="input_text" id="input_text" placeholder="Paste the paragraph you want to summarize..."></textarea>
-                </div>
-
-                <div id="qa-input-group" class="hidden">
-                    <div class="form-group">
-                        <label for="context">Context</label>
-                        <textarea name="context" id="context" placeholder="Enter context passage..."></textarea>
-                    </div>
-
-                    <div class="form-group">
-                        <label for="question">Question</label>
-                        <textarea name="question" id="question" placeholder="Enter your question..."></textarea>
-                    </div>
-                </div>
-
-                <div class="optional-fields">
-                    <p class="optional-title">Optional Configuration</p>
-
-                    <div class="form-group">
-                        <label for="user_prompt">Initial Prompt (Optional)</label>
-                        <textarea
-                            name="user_prompt"
-                            id="user_prompt"
-                            placeholder="e.g., Summarize the following text clearly and concisely"
-                        ></textarea>
-                        <p class="hint">Leave blank to use a task-specific default prompt</p>
-                    </div>
-
-                    <div class="form-group">
-                        <label for="goal">Optimization Goal</label>
-                        <select name="goal" id="goal">
-                            <option value="Balanced" selected>Balanced</option>
-                            <option value="High Quality">High Quality</option>
-                            <option value="Low Cost">Low Cost</option>
-                        </select>
-                    </div>
-                </div>
-
-                <button type="submit">Optimize Prompt</button>
-            </form>
-        </div>
+<body class="font-body selection:bg-primary-container selection:text-white">
+<!-- Ambient Visuals -->
+<div class="void-orb orb-primary"></div>
+<div class="void-orb orb-secondary"></div>
+<!-- TopNavBar -->
+<header class="w-full top-0 sticky bg-transparent backdrop-blur-xl z-50">
+<nav class="flex justify-between items-center w-full px-8 py-6 max-w-7xl mx-auto">
+<div class="text-2xl font-bold tracking-tighter text-zinc-100 font-headline" style="">PromptOptEnv</div>
+<div class="hidden md:flex items-center space-x-12">
+<button onclick="window.location.href='/app'" class="bg-white/10 hover:bg-white/20 border border-white/20 text-white px-6 py-2 rounded-lg font-bold transition-all active:scale-95">
+                    Try Now
+                </button>
+</div>
+<!-- Mobile Toggle -->
+<button class="md:hidden text-on-surface" style="">
+<span class="material-symbols-outlined" data-icon="menu" style="">menu</span>
+</button>
+</nav>
+</header>
+<main class="relative z-10">
+<!-- Hero Section -->
+<section class="min-h-[70vh] flex flex-col items-center justify-center text-center px-4 pt-20">
+<div class="max-w-4xl mx-auto">
+<h1 class="text-6xl md:text-8xl font-headline font-bold text-white tracking-tighter mb-6 leading-none" style="">
+                    PromptOptEnv
+                </h1>
+<p class="text-xl md:text-2xl font-light text-on-surface-variant max-w-2xl mx-auto mb-12 font-body tracking-tight" style="">
+                    RL-Powered Prompt Optimization with <span class="text-primary" style="">Cost Awareness</span>.
+                </p>
+<div class="flex justify-center mt-4">
+<div class="glow-pill w-fit transition-transform hover:scale-105 active:scale-95 shadow-2xl" onclick="window.location.href='/app'">
+    <div class="glow-pill-inner px-12 py-4 flex items-center justify-center">
+        <span class="text-white font-bold text-lg">Try Now</span>
     </div>
-    <script>
-        const taskField = document.getElementById("task");
-        const genericInputGroup = document.getElementById("generic-input-group");
-        const genericInputLabel = document.getElementById("generic-input-label");
-        const genericInput = document.getElementById("input_text");
-        const qaInputGroup = document.getElementById("qa-input-group");
+</div>
+</div>
+<div class="mt-24 grid grid-cols-1 md:grid-cols-3 gap-8 w-full max-w-6xl mx-auto px-4">
+<div class="h-px bg-gradient-to-r from-transparent via-outline-variant to-transparent opacity-30 md:hidden"></div>
+</div>
+</div>
+</section>
+<!-- About the Project Section -->
+<section class="pb-16 px-8 max-w-7xl mx-auto">
+<div class="glass-card p-8 md:p-16 rounded-3xl border border-white/5 relative overflow-hidden group">
+<div class="absolute top-0 right-0 w-64 h-64 bg-primary/5 rounded-full blur-3xl -translate-y-1/2 translate-x-1/2 group-hover:bg-primary/10 transition-colors"></div>
+<div class="relative z-10 flex flex-col md:flex-row gap-12 items-center">
+<div class="md:w-1/3">
+<h2 class="text-4xl md:text-5xl font-headline font-bold text-white tracking-tighter leading-tight" style="">
+                    About the Project
+                </h2>
+<div class="mt-4 w-24 h-1 bg-primary rounded-full"></div>
+</div>
+<div class="md:w-2/3">
+<p class="text-xl md:text-2xl font-body font-light text-on-surface-variant leading-relaxed" style="">
+                    PromptOptEnv is a high-fidelity <span class="text-white font-medium">RL-Powered Prompt Optimization</span> tool designed for the next generation of AI development. 
+                    By integrating deep Reinforcement Learning with <span class="text-tertiary font-medium">Cost Awareness</span>, we've engineered a platform that doesn't just improve outputs, but does so with surgical precision. 
+                    Built specifically for high-performance <span class="text-secondary font-medium">production workloads</span>, it delivers consistent efficiency when every token counts.
+                </p>
+<div class="mt-8 flex flex-wrap gap-4">
+<span class="px-4 py-2 rounded-full border border-outline-variant/30 bg-white/5 text-xs font-label uppercase tracking-widest text-zinc-400">Reinforcement Learning</span>
+<span class="px-4 py-2 rounded-full border border-outline-variant/30 bg-white/5 text-xs font-label uppercase tracking-widest text-zinc-400">Token Efficiency</span>
+<span class="px-4 py-2 rounded-full border border-outline-variant/30 bg-white/5 text-xs font-label uppercase tracking-widest text-zinc-400">Production Grade</span>
+</div>
+</div>
+</div>
+</div>
+</section>
+<!-- Features Section (Bento Inspired) -->
+<section class="pb-32 px-8 max-w-7xl mx-auto">
+<div class="grid grid-cols-1 md:grid-cols-12 gap-6">
+<!-- Feature 1: RL-Powered -->
+<div class="md:col-span-8 glass-card p-12 rounded-xl group hover:border-primary/30 transition-all duration-500">
+<div class="flex flex-col h-full justify-between">
+<div>
+<div class="mb-8 w-12 h-12 rounded-full bg-primary-container/10 flex items-center justify-center border border-primary/20">
+<span class="material-symbols-outlined text-primary" data-icon="auto_awesome" style="">auto_awesome</span>
+</div>
+<h3 class="text-4xl font-headline font-bold text-white mb-6" style="">RL-Powered Precision</h3>
+<p class="text-on-surface-variant text-lg leading-relaxed max-w-xl" style="">
+                                Our Reinforcement Learning engine autonomously explores the prompt latent space, adapting optimization strategies for maximum context alignment and output fidelity.
+                            </p>
+</div>
+<div class="mt-12 h-48 w-full overflow-hidden rounded-lg bg-black/40 border border-white/5">
+<img class="w-full h-full object-cover opacity-50 grayscale hover:grayscale-0 transition-all duration-700" data-alt="abstract neural network visualization with glowing orange nodes and connections on a dark technical background" src="https://lh3.googleusercontent.com/aida-public/AB6AXuDHfagrpd5Gwoee-oPV1fsj5bz4-dbzS36Gzqd87-aY4n-MmeOLDU_cTS2R0VS_QyO5iQEGiKjoRqbGA0eArKYRrPdKOa84iwiKkMbhBl9pW9byuflJm-jLk96GfWhm46803LAsO3o5s2nevrRnPYQl802wEnJpzk46GIlJ2fzBs1q6tgoihmFvMGO1fKWJ-kclxPpMyYdbCk2kuaxyCvf-vFIr3pl_hdCYWqX9tApZ15Llu600Lqu-6ppOns0hqSp5yZDqVDxHyMda" style=""/>
+</div>
+</div>
+</div>
+<!-- Feature 2: Cost Awareness -->
+<div class="md:col-span-4 glass-card p-12 rounded-xl border-l-2 border-l-tertiary-container group hover:bg-surface-container-low transition-all">
+<div class="flex flex-col h-full">
+<div class="mb-8 w-12 h-12 rounded-full bg-tertiary-container/10 flex items-center justify-center border border-tertiary/20">
+<span class="material-symbols-outlined text-tertiary" data-icon="account_balance_wallet" style="">account_balance_wallet</span>
+</div>
+<h3 class="text-3xl font-headline font-bold text-white mb-6" style="">Cost Awareness</h3>
+<p class="text-on-surface-variant leading-relaxed" style="">
+                            Intelligent budgeting algorithms to reduce token consumption without sacrificing performance quality.
+                        </p>
+<div class="mt-auto pt-12">
+<div class="text-6xl font-headline font-bold text-tertiary/20" style="">90%</div>
+<div class="text-sm font-label uppercase tracking-widest text-zinc-500" style="">Efficiency Gain</div>
+</div>
+</div>
+</div>
+<!-- Feature 3: Dynamic Task Adapters -->
+<div class="md:col-span-4 glass-card p-12 rounded-xl group hover:bg-surface-container-low transition-all">
+<div class="flex flex-col h-full">
+<div class="mb-8 w-12 h-12 rounded-full bg-secondary-container/10 flex items-center justify-center border border-secondary/20">
+<span class="material-symbols-outlined text-secondary" data-icon="extension" style="">extension</span>
+</div>
+<h3 class="text-3xl font-headline font-bold text-white mb-6" style="">Dynamic Task Adapters</h3>
+<p class="text-on-surface-variant leading-relaxed" style="">
+                            Modular grading architectures designed universally for Summarization, QA, and advanced Instruction Following tasks.
+                        </p>
+</div>
+</div>
+<!-- Feature 4: Visual Edge -->
+<div class="md:col-span-8 glass-card rounded-xl overflow-hidden relative group">
+<img class="w-full h-full object-cover opacity-40 group-hover:scale-105 transition-transform duration-1000" data-alt="high-tech dashboard interface with holographic data visualizations and code structures in deep space blue and orange" src="https://lh3.googleusercontent.com/aida-public/AB6AXuC9L4wg9NZ7NI4V7KRKT44KbOIJrTh574LoiFRPxkBWVTWtuerdEuUCadVPAUm5p4Zi1l14exATHaau0xBdty19zmS_DHLyvA320oiDFpN0A7hbc-0Intk6DBQ265HETMd9MJcYNx3tk0NRJgJlGjTNmHLvbQOi9xdVB-pYfPpQMmm7_QCvCllmtLoeZgRSrsW33ac8Re6iNk3TbD1Zg6o_-nnubHMP5njMQR0qoBRwXHZV1SRekKfJtDoX3HEGUPBN15EQszgTWbZ1" style=""/>
+<div class="absolute inset-0 bg-gradient-to-t from-black via-black/20 to-transparent p-12 flex flex-col justify-end">
+<h3 class="text-4xl font-headline font-bold text-white mb-2" style="">Infinite Scaling</h3>
+<p class="text-on-surface-variant max-w-md" style="">Deploy RL-optimized environments across distributed clusters with one-click orchestration.</p>
+</div>
+</div>
+</div>
+</section>
+<!-- CTA Section -->
+<section class="py-12 text-center px-4">
+<div class="max-w-3xl mx-auto py-24 glass-card rounded-3xl relative overflow-hidden border border-white/5">
+<div class="absolute top-0 left-1/2 -translate-x-1/2 w-full h-1 bg-gradient-to-r from-transparent via-primary to-transparent opacity-50"></div>
+<h2 class="text-4xl md:text-5xl font-headline font-bold text-white mb-8" style="">Ready to Optimize?</h2>
+<p class="text-on-surface-variant mb-12 text-lg" style="">Join the frontier of automated prompt engineering.</p>
 
-        const inputConfig = {
-            "Summarization": {
-                label: "Input Text",
-                placeholder: "Paste the paragraph you want to summarize..."
-            },
-            "Paraphrasing": {
-                label: "Sentence",
-                placeholder: "Enter a sentence to paraphrase..."
-            },
-            "Instruction Following": {
-                label: "Instruction",
-                placeholder: "e.g., Explain photosynthesis in simple terms"
-            }
-        };
+<div class="flex justify-center mt-4">
+<div class="glow-pill w-fit transition-transform hover:scale-105 active:scale-95 shadow-2xl" onclick="window.location.href='/app'">
+    <div class="glow-pill-inner px-12 py-4 flex items-center justify-center">
+        <span class="text-white font-bold text-lg">Get Started</span>
+    </div>
+</div>
+</div>
+</div>
+</section>
+</main>
+<!-- Footer -->
+<footer class="w-full border-t border-zinc-800/30 tonal-shift bg-zinc-950">
+<div class="flex flex-col md:flex-row justify-between items-center w-full px-8 py-12 max-w-7xl mx-auto">
+<div class="mb-8 md:mb-0">
+<div class="text-lg font-bold text-zinc-100 mb-2 font-headline" style="">PromptOptEnv</div>
+<p class="font-['Inter'] text-sm tracking-tight text-zinc-500" style="">© 2026 PromptOptEnv. Precise RL Optimization.</p>
+</div>
+<div class="flex items-center space-x-8">
+<a class="text-zinc-500 hover:text-orange-500 transition-all text-sm font-['Inter']" href="https://github.com/Shyamyemuka" target="_blank" rel="noopener noreferrer" style="">GitHub</a>
+<a class="text-zinc-500 hover:text-orange-500 transition-all text-sm font-['Inter']" href="https://www.linkedin.com/in/shyam-yemuka-0aba06205/" target="_blank" rel="noopener noreferrer" style="">LinkedIn</a>
+</div>
+<div class="mt-8 md:mt-0 flex items-center space-x-4 opacity-80 hover:opacity-100">
+<div class="w-2 h-2 rounded-full bg-green-500"></div>
+<span class="text-xs font-label uppercase tracking-widest text-zinc-400" style="">All Systems Operational</span>
+</div>
+</div>
+</footer>
+</body></html>"""
+    with open(os.path.join(tpl_dir, "landing.html"), "w", encoding="utf-8") as f:
+        f.write(landing_html)
 
-        function updateTaskInputs() {
-            const selectedTask = taskField.value;
+def _write_index_html(tpl_dir: str):
+    index_html = """<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>PromptOptEnv - Prompt Optimization</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<style data-purpose="custom-fonts">
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+    body { font-family: 'Inter', sans-serif; }
+</style>
+<style data-purpose="custom-effects">
+    .glow-border {
+      position: relative;
+      border-radius: 14px;
+      z-index: 1;
+      overflow: hidden;
+      padding: 3px;
+    }
+    .glow-border::before {
+      content: "";
+      position: absolute;
+      top: -50%; left: -50%; bottom: -50%; right: -50%;
+      background: conic-gradient(transparent, transparent, transparent, #4d79ff, #ff4d4d);
+      z-index: -1;
+      animation: spin 10s linear infinite;
+    }
+    .glow-border-inner {
+      background: #050505;
+      border-radius: 12px;
+      position: relative;
+      z-index: 2;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      height: 100%;
+    }
+    @keyframes spin { 100% { transform: rotate(360deg); } }
+    .hidden { display: none !important; }
+</style>
+</head>
+<body class="bg-black text-gray-300 min-h-screen flex flex-col items-center justify-center p-4">
+<!-- Back to Home -->
+<a href="/" class="absolute top-6 left-6 flex items-center gap-2 text-gray-400 hover:text-white transition-colors group z-50">
+    <svg class="h-5 w-5 transform group-hover:-translate-x-1 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M10 19l-7-7m0 0l7-7m-7 7h18" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg>
+    <span class="text-sm font-medium">Back to Home</span>
+</a>
 
-            if (selectedTask === "Question Answering") {
-                genericInputGroup.classList.add("hidden");
-                qaInputGroup.classList.remove("hidden");
-                return;
-            }
+<!-- BEGIN: Header Section -->
+<header class="text-center mb-6">
+<h1 class="text-white text-4xl font-bold mb-2 tracking-tight"><a href="/">PromptOptEnv</a></h1>
+<p class="text-gray-400 text-sm">RL-Powered Prompt Optimization with Cost Awareness</p>
+</header>
+<!-- END: Header Section -->
+<!-- BEGIN: Main Form Container -->
+<main class="w-full max-w-2xl glow-border">
+<div class="glow-border-inner p-8 shadow-2xl">
+<form action="/optimize" class="space-y-6" method="POST">
+<!-- Select Task -->
+<div data-purpose="form-group">
+<label class="block text-sm font-medium text-gray-300 mb-2" for="task">Select Task</label>
+<div class="relative">
+<select class="block w-full bg-black border border-gray-700 rounded-md py-3 pl-4 pr-10 text-gray-400 focus:outline-none focus:ring-1 focus:ring-gray-500 focus:border-gray-500 sm:text-sm appearance-none" id="task" name="task">
+<option value="Summarization">Summarization</option>
+<option value="Question Answering">Question Answering</option>
+<option value="Paraphrasing">Paraphrasing</option>
+<option value="Instruction Following">Instruction Following</option>
+</select>
+<div class="pointer-events-none absolute inset-y-0 right-0 flex items-center px-4 text-gray-500">
+<svg class="h-4 w-4" fill="none" stroke="currentColor" viewbox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M19 9l-7 7-7-7" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg>
+</div>
+</div>
+</div>
+<!-- Input Text -->
+<div id="generic-input-group" data-purpose="form-group">
+<label id="generic-input-label" class="block text-sm font-medium text-gray-300 mb-2" for="input-text">Input Text</label>
+<textarea class="block w-full bg-black border border-gray-700 rounded-md py-3 px-4 text-gray-400 placeholder-gray-600 focus:outline-none focus:ring-1 focus:ring-gray-500 focus:border-gray-500 sm:text-sm resize-y" id="input-text" name="input-text" placeholder="Paste the paragraph you want to optimize for submission..." rows="4"></textarea>
+</div>
 
-            qaInputGroup.classList.add("hidden");
-            genericInputGroup.classList.remove("hidden");
-            const config = inputConfig[selectedTask];
-            genericInputLabel.textContent = config.label;
-            genericInput.placeholder = config.placeholder;
+<!-- QA Inputs -->
+<div id="qa-input-group" class="hidden space-y-6">
+    <div data-purpose="form-group">
+    <label class="block text-sm font-medium text-gray-300 mb-2" for="context">Context</label>
+    <textarea class="block w-full bg-black border border-gray-700 rounded-md py-3 px-4 text-gray-400 placeholder-gray-600 focus:outline-none focus:ring-1 focus:ring-gray-500 focus:border-gray-500 sm:text-sm resize-y" id="context" name="context" placeholder="Enter context passage..." rows="3"></textarea>
+    </div>
+    
+    <div data-purpose="form-group">
+    <label class="block text-sm font-medium text-gray-300 mb-2" for="question">Question</label>
+    <textarea class="block w-full bg-black border border-gray-700 rounded-md py-3 px-4 text-gray-400 placeholder-gray-600 focus:outline-none focus:ring-1 focus:ring-gray-500 focus:border-gray-500 sm:text-sm resize-y" id="question" name="question" placeholder="Enter your question..." rows="2"></textarea>
+    </div>
+</div>
+
+<!-- Divider / Optional Config Header -->
+<div class="pt-2">
+<h3 class="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-4">OPTIONAL CONFIGURATION</h3>
+</div>
+<!-- Initial Prompt -->
+<div data-purpose="form-group">
+<label class="block text-sm font-medium text-gray-300 mb-2" for="initial-prompt">Initial Prompt (Optional)</label>
+<textarea class="block w-full bg-black border border-gray-700 rounded-md py-3 px-4 text-gray-400 placeholder-gray-600 focus:outline-none focus:ring-1 focus:ring-gray-500 focus:border-gray-500 sm:text-sm resize-y" id="initial-prompt" name="initial-prompt" placeholder="e.g., Summarize this for a technical audience..." rows="3"></textarea>
+</div>
+<!-- Optimization Goal -->
+<div data-purpose="form-group">
+<label class="block text-sm font-medium text-gray-300 mb-2" for="optimization-goal">Optimization Goal</label>
+<div class="relative">
+<select class="block w-full bg-black border border-gray-700 rounded-md py-3 pl-4 pr-10 text-gray-400 focus:outline-none focus:ring-1 focus:ring-gray-500 focus:border-gray-500 sm:text-sm appearance-none" id="optimization-goal" name="optimization-goal">
+<option value="Balanced">Balanced</option>
+<option value="High Quality">High Quality</option>
+<option value="Low Cost">Low Cost</option>
+</select>
+<div class="pointer-events-none absolute inset-y-0 right-0 flex items-center px-4 text-gray-500">
+<svg class="h-4 w-4" fill="none" stroke="currentColor" viewbox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M19 9l-7 7-7-7" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg>
+</div>
+</div>
+</div>
+<!-- Submit Button -->
+<div class="pt-4">
+<button class="w-full bg-black border border-gray-600 rounded-full py-3 px-4 text-sm font-medium text-white hover:bg-gray-900 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-500 focus:ring-offset-black transition-colors duration-200" type="submit">
+            Optimize Prompt
+</button>
+</div>
+</form>
+</div>
+</main>
+<!-- END: Main Form Container -->
+<script>
+    const taskField = document.getElementById("task");
+    const genericInputGroup = document.getElementById("generic-input-group");
+    const genericInputLabel = document.getElementById("generic-input-label");
+    const genericInput = document.getElementById("input-text");
+    const qaInputGroup = document.getElementById("qa-input-group");
+
+    const inputConfig = {
+        "Summarization": { label: "Input Text", placeholder: "Paste the paragraph you want to summarize..." },
+        "Paraphrasing": { label: "Sentence", placeholder: "Enter a sentence to paraphrase..." },
+        "Instruction Following": { label: "Instruction", placeholder: "e.g., Explain photosynthesis in simple terms" }
+    };
+
+    function updateTaskInputs() {
+        const selectedTask = taskField.value;
+        if (selectedTask === "Question Answering") {
+            genericInputGroup.classList.add("hidden");
+            qaInputGroup.classList.remove("hidden");
+            return;
         }
+        qaInputGroup.classList.add("hidden");
+        genericInputGroup.classList.remove("hidden");
+        const config = inputConfig[selectedTask] || inputConfig["Summarization"];
+        genericInputLabel.textContent = config.label;
+        genericInput.placeholder = config.placeholder;
+    }
+    taskField.addEventListener("change", updateTaskInputs);
+    updateTaskInputs();
 
-        taskField.addEventListener("change", updateTaskInputs);
-        updateTaskInputs();
-    </script>
-</body>
-</html>'''
-
+    document.querySelector('form').addEventListener('submit', function(e) {
+        const selected = taskField.value;
+        if (selected === "Question Answering") {
+            const ctx = document.getElementById('context').value.trim();
+            const q = document.getElementById('question').value.trim();
+            if (!ctx && !q) {
+                e.preventDefault();
+                alert('Please provide Context or a Question before optimizing.');
+            }
+        } else {
+            const txt = document.getElementById('input-text').value.trim();
+            if (!txt) {
+                e.preventDefault();
+                alert('Please provide Input Text before optimizing.');
+            }
+        }
+    });
+</script>
+</body></html>"""
     with open(os.path.join(tpl_dir, "index.html"), "w", encoding="utf-8") as f:
         f.write(index_html)
 
 
 def _write_results_html(tpl_dir: str):
-    """Write results.html into tpl_dir."""
-    results_html = '''<!DOCTYPE html>
+    results_html = """<!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Optimization Results - PromptOptEnv</title>
-    <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh;
-            padding: 40px 20px;
-            color: #333;
-        }
-        .container { max-width: 700px; margin: 0 auto; }
-        .card {
-            background: white; border-radius: 12px; padding: 40px;
-            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
-            font-size: 16px; line-height: 1.6;
-        }
-        .task-header {
-            font-size: 20px; font-weight: bold; margin-bottom: 25px;
-        }
-        hr {
-            border: 0; height: 1px; background: #ddd; margin: 30px 0;
-        }
-        .label {
-            font-weight: bold; margin-bottom: 5px;
-        }
-        .quote {
-            font-style: italic; color: #555; margin-bottom: 20px;
-            background: #f9f9f9; padding: 10px; border-left: 4px solid #667eea;
-        }
-        .success-text {
-            color: #2e7d32; font-weight: bold; margin-top: 20px;
-        }
-        .metrics-block {
-            margin-top: 18px;
-            padding: 12px;
-            background: #f7f9ff;
-            border: 1px solid #d7deef;
-            border-radius: 10px;
-        }
-        .metric-line {
-            margin: 6px 0;
-            font-weight: 600;
-            color: #2f3b52;
-        }
-        .info-text {
-            color: #5f6368; margin-top: 14px; font-size: 14px;
-        }
-        .debug-box {
-            margin-top: 10px;
-            padding: 10px;
-            background: #f4f6fb;
-            border: 1px solid #dbe1f0;
-            border-radius: 8px;
-            color: #3f4a5f;
-            font-size: 13px;
-            line-height: 1.45;
-        }
-        .back-btn {
-            display: inline-block; margin-top: 30px; padding: 12px 30px;
-            background: white; color: #667eea; text-decoration: none;
-            border-radius: 8px; font-weight: 600; box-shadow: 0 4px 15px rgba(0,0,0,0.1);
-        }
-    </style>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Optimization Results - PromptOptEnv</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style data-purpose="custom-fonts">
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+    body { font-family: 'Inter', sans-serif; }
+</style>
+<style data-purpose="custom-effects">
+    .glow-border {
+      position: relative;
+      border-radius: 14px;
+      z-index: 1;
+      overflow: hidden;
+      padding: 3px;
+    }
+    .glow-border::before {
+      content: "";
+      position: absolute;
+      top: -50%; left: -50%; bottom: -50%; right: -50%;
+      background: conic-gradient(transparent, transparent, transparent, #4d79ff, #ff4d4d);
+      z-index: -1;
+      animation: spin 10s linear infinite;
+    }
+    .glow-border-inner {
+      background: #050505;
+      border-radius: 12px;
+      position: relative;
+      z-index: 2;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      height: 100%;
+    }
+    @keyframes spin { 100% { transform: rotate(360deg); } }
+</style>
 </head>
-<body>
-    <div class="container">
+<body class="bg-black text-gray-300 min-h-screen flex flex-col items-center py-10 px-4">
+<!-- Back to Home -->
+<a href="/" class="absolute top-6 left-6 flex items-center gap-2 text-gray-400 hover:text-white transition-colors group z-50">
+    <svg class="h-5 w-5 transform group-hover:-translate-x-1 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M10 19l-7-7m0 0l7-7m-7 7h18" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg>
+    <span class="text-sm font-medium">Back to Home</span>
+</a>
+
+
+<main class="w-full max-w-5xl glow-border">
+<div class="glow-border-inner p-8 shadow-2xl">
+    <div class="flex items-center justify-between xl:mb-8 mb-6">
+        <h2 class="text-2xl font-bold text-white tracking-tight">Optimization Results: {{ task }}</h2>
+        <a href="/app" class="px-4 py-2 rounded-full border border-gray-600 text-sm font-medium hover:bg-gray-800 transition-colors">&larr; Optimize Another</a>
+    </div>
+
+    <!-- Before / After split -->
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
         
-        <div class="card">
-            <div class="task-header">Task: {{ task }}</div>
+        <!-- BEFORE -->
+        <div class="p-6 bg-[#0a0a0a] rounded-xl border border-gray-800">
+            <h3 class="text-red-400 font-semibold mb-4 text-sm uppercase tracking-wider">Before (Baseline)</h3>
             
-            <div class="label">Initial Prompt:</div>
-            <div class="quote">{{ initial_prompt }}</div>
-            
-            <div class="label">Output:</div>
-            <div class="quote">{{ initial_output or '[No output generated]' }}</div>
-            
-            <div class="label" style="margin-bottom: 30px;">Reward: {{ "%.2f"|format(initial_reward) }}</div>
-            
-            <hr>
-            
-            <div class="task-header">After Optimization ({{ steps_taken }} steps):</div>
-            
-            <div class="label">Prompt:</div>
-            <div class="quote">{{ final_prompt }}</div>
-            
-            <div class="label">Output:</div>
-            <div class="quote">{{ final_output or '[No output generated]' }}</div>
-            
-            <div class="label">Reward: {{ "%.2f"|format(final_reward) }}</div>
-            <div class="label">Total Episode Reward: {{ "%.2f"|format(total_reward) }}</div>
-            
-            <div class="metrics-block">
-                <div class="metric-line">
-                    Token Reduction: {{ "%+.0f"|format(token_reduction_abs) }} ({{ "%+.1f"|format(token_reduction_pct_total) }}%)
-                </div>
-                <div class="metric-line">
-                    Cost Reduction: {{ "%+.2f"|format(cost_reduction_abs) }} ({{ "%+.1f"|format(cost_reduction_pct) }}%)
-                </div>
-                <div class="metric-line">
-                    Quality Improvement: {{ "%+.4f"|format(quality_improvement_abs) }} ({{ "%+.1f"|format(quality_improvement_pct) }}%)
+            <div class="mb-5">
+                <span class="block text-xs text-gray-500 font-medium mb-2 uppercase">Prompt</span>
+                <div class="p-4 bg-black border border-gray-800 rounded-md text-sm text-gray-300 leading-relaxed italic">
+                    {{ initial_prompt }}
                 </div>
             </div>
-            {% if used_fallback %}
-            <div class="info-text">
-                API connection failed, so offline fallback outputs were used for this run.
+            
+            <div class="mb-5">
+                <span class="block text-xs text-gray-500 font-medium mb-2 uppercase">LLM Output</span>
+                <div class="p-4 bg-black border border-gray-800 rounded-md text-sm text-gray-400 leading-relaxed max-h-64 overflow-y-auto">
+                    {{ initial_output or '[No output generated]' }}
+                </div>
             </div>
-            <div class="debug-box">
-                <div>Reason: {{ fallback_reason or "unknown_connection_error" }}</div>
-                <div>Token detected: {{ "yes" if llm_runtime.token_present else "no" }}</div>
-                <div>Model: {{ llm_runtime.model_name }}</div>
-                <div>Base URL: {{ llm_runtime.api_base_url }}</div>
+            
+            <div>
+                <span class="block text-xs text-gray-500 font-medium mb-2 uppercase">Reward Score</span>
+                <div class="text-xl text-white font-bold">{{ "%.2f"|format(initial_reward) }}</div>
             </div>
-            {% endif %}
         </div>
 
-        <div style="text-align: center;">
-            <a href="/" class="back-btn">&#8592; Optimize Another</a>
+        <!-- AFTER -->
+        <div class="p-6 bg-[#0a0a0a] rounded-xl border border-gray-800 relative shadow-[0_0_25px_rgba(77,121,255,0.05)]">
+            <h3 class="text-blue-400 font-semibold mb-4 text-sm uppercase tracking-wider">After (Optimized - {{ steps_taken }} steps)</h3>
+            
+            <div class="mb-5">
+                <span class="block text-xs text-gray-500 font-medium mb-2 uppercase">Optimized Prompt</span>
+                <div class="p-4 bg-black border border-gray-700 rounded-md text-sm text-gray-200 leading-relaxed font-mono">
+                    {{ final_prompt }}
+                </div>
+            </div>
+            
+            <div class="mb-5">
+                <span class="block text-xs text-gray-500 font-medium mb-2 uppercase">LLM Output</span>
+                <div class="p-4 bg-black border border-gray-800 rounded-md text-sm text-gray-300 leading-relaxed max-h-64 overflow-y-auto">
+                    {{ final_output or '[No output generated]' }}
+                </div>
+            </div>
+            
+            <div>
+                <span class="block text-xs text-gray-500 font-medium mb-2 uppercase">Reward Score</span>
+                <div class="text-xl text-white font-bold">{{ "%.2f"|format(final_reward) }}</div>
+            </div>
         </div>
     </div>
-</body>
-</html>'''
+    
+    <div class="mt-8 pt-6 border-t border-gray-800">
+        <h3 class="text-xs text-gray-500 font-semibold mb-4 uppercase tracking-wider">Episode Metrics</h3>
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div class="p-4 bg-[#0d0d0d] rounded-lg border border-gray-800">
+                <div class="text-sm text-gray-400 mb-1">Quality Imp.</div>
+                <div class="text-lg text-white">{{ "%+.4f"|format(quality_improvement_abs) }} ({{ "%+.1f"|format(quality_improvement_pct) }}%)</div>
+            </div>
+            <div class="p-4 bg-[#0d0d0d] rounded-lg border border-gray-800">
+                <div class="text-sm text-gray-400 mb-1">Token Reduction</div>
+                <div class="text-lg text-white">{{ "%+.0f"|format(token_reduction_abs) }} ({{ "%+.1f"|format(token_reduction_pct_total) }}%)</div>
+            </div>
+            <div class="p-4 bg-[#0d0d0d] rounded-lg border border-gray-800">
+                <div class="text-sm text-gray-400 mb-1">Cost Reduction</div>
+                <div class="text-lg text-white">{{ "%+.2f"|format(cost_reduction_abs) }} ({{ "%+.1f"|format(cost_reduction_pct) }}%)</div>
+            </div>
+        </div>
+    </div>
 
+    {% if used_fallback %}
+    <div class="mt-6 p-4 bg-red-900/20 border border-red-500/30 rounded-lg text-sm text-red-200">
+        <strong>Offline Mode:</strong> API connection failed, so offline fallback outputs were used for this run.<br>
+        Reason: {{ fallback_reason or "unknown_connection_error" }} | Model: {{ llm_runtime.model_name }}
+    </div>
+    {% endif %}
+
+</div>
+</main>
+
+</body>
+</html>"""
     with open(os.path.join(tpl_dir, "results.html"), "w", encoding="utf-8") as f:
         f.write(results_html)
 
-
 if __name__ == "__main__":
+    import threading
+    import webbrowser
+    import uvicorn
     PORT = 5000
     URL = f"http://localhost:{PORT}"
 
@@ -1032,12 +1324,10 @@ if __name__ == "__main__":
     print(f"  Templates written to: {os.path.join(BASE_DIR, 'templates')}")
     print(f"  Press Ctrl+C to stop\n")
 
-    # Open browser after a short delay so the server has time to start
     def _open_browser():
         import time
         time.sleep(1.5)
         webbrowser.open(URL)
 
     threading.Thread(target=_open_browser, daemon=True).start()
-
     uvicorn.run(app, host="0.0.0.0", port=PORT)

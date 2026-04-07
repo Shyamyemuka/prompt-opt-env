@@ -1,31 +1,22 @@
-# RUN.md - Meta x Scaler OpenEnv Hackathon Guide
+# 🚀 Running the Application (Sequential Guide)
 
-This runbook is updated to reflect the current implementation and Docker-validated workflow for `prompt-opt-env`.
+This guide provides a step-by-step, sequential workflow to set up, run, and test the `prompt-opt-env` application. Follow these steps in order to get the project running locally and understand how the different components fit together.
 
-## 1. Prerequisites
+---
 
-- Python `3.11+`
-- [uv](https://docs.astral.sh/uv/getting-started/installation/)
-- Docker Desktop (running)
-- HuggingFace account + token (`HF_TOKEN`)
-- OpenEnv CLI (`openenv`)
-
-## 2. Fresh Install (Using uv)
-
-From repository root:
+## Step 1: Install Dependencies
+**Description:** Set up an isolated Python virtual environment and install the required packages using `uv`. This ensures your system Python remains clean and the application has exactly what it needs.
 
 ```bash
-git clone <your-repo-url>
-cd prompt-opt-env
 uv venv
 uv pip install -e "./prompt_opt_env[dev]"
 ```
 
-## 3. Configure Environment Variables
+## Step 2: Configure Environment Variables
+**Description:** Create a configuration file named `.env.local` in the root directory. This file stores your API keys and configuration settings so the application can communicate with the AI models.
 
-Create `.env.local` in repo root:
-
-```env
+```bash
+# Create a .env.local file in the project root and add the following:
 HF_TOKEN=hf_your_token_here
 API_BASE_URL=https://router.huggingface.co/v1/
 MODEL_NAME=Qwen/Qwen2.5-72B-Instruct
@@ -35,171 +26,80 @@ DONE_THRESHOLD=0.85
 LLM_TIMEOUT_SECONDS=10
 ```
 
-PowerShell example:
-
-```powershell
-$env:HF_TOKEN="hf_your_token_here"
-$env:API_BASE_URL="https://router.huggingface.co/v1/"
-$env:MODEL_NAME="Qwen/Qwen2.5-72B-Instruct"
-```
-
-## 4. Run Locally (Non-Docker)
-
-### A) Web UI (Prompt Optimizer)
-
-```bash
-python web_app.py
-```
-
-Open: `http://localhost:5000`
-
-### B) OpenEnv API server
+## Step 3: Run the OpenEnv API Server (Backend)
+**Description:** Start the core reinforcement learning environment server. This API acts as the brain/backend for the prompt optimization process. **You should leave this terminal running.**
 
 ```bash
 cd prompt_opt_env
 uv run server
 ```
+*Health Check:* You can verify the backend is running by executing `curl http://localhost:8000/health` in a new terminal window.
 
-OpenAPI health:
+## Step 4: Run the Web UI (Prompt Optimizer)
+**Description:** Start the user-friendly web interface. This communicates with the API server created in Step 3 so you can visually interact with the optimizer. **Open a new terminal for this step.**
 
 ```bash
-curl http://localhost:8000/health
+python web_app.py
 ```
+*Access:* Open your web browser and navigate to `http://localhost:5000` to use the application.
 
-### C) Baseline inference script (mandatory file)
-
-From repo root:
+## Step 5: Test the Baseline Inference Script
+**Description:** Run the mandatory OpenEnv script. This executes a programmatic reinforcement learning loop against the environment to verify everything is working under the hood. **You can run this in a new terminal window.**
 
 ```bash
 python inference.py
 ```
 
-## 5. Docker Workflow (Validated)
+---
 
-This is the workflow currently used to validate container behavior.
+# 🐳 Alternative: Running with Docker
 
-### A) Build image
+If you prefer to run the backend API server using Docker instead of natively via `uv`, you can follow these sequential steps (This acts as an alternative to **Step 3** above).
 
-From repo root:
+## 1. Build the Docker Image
+**Description:** Build the container image for the API server based on your current code.
 
 ```bash
 docker build -t prompt-opt-env-web:latest -f prompt_opt_env/server/Dockerfile prompt_opt_env
 ```
 
-### B) Run container
+## 2. Run the Docker Container
+**Description:** Start the backend server inside a Docker container in the background, injecting your environment variables.
 
 ```powershell
-docker run -d --name prompt-opt-env-web-run -p 8000:8000 ^
-  -e API_BASE_URL=https://router.huggingface.co/v1/ ^
-  -e MODEL_NAME=Qwen/Qwen2.5-72B-Instruct ^
-  -e HF_TOKEN=hf_your_token_here ^
-  -e GRADER=rouge ^
+docker run -d --name prompt-opt-env-web-run -p 8000:8000 `
+  -e API_BASE_URL=https://router.huggingface.co/v1/ `
+  -e MODEL_NAME=Qwen/Qwen2.5-72B-Instruct `
+  -e HF_TOKEN=hf_your_token_here `
+  -e GRADER=rouge `
   prompt-opt-env-web:latest
 ```
 
-### C) Verify container
-
-PowerShell:
+## 3. Verify the Container Logs
+**Description:** Check the Docker logs to ensure the API server started correctly without any errors.
 
 ```powershell
-docker ps --filter "name=prompt-opt-env-web-run"
 docker logs --tail 40 prompt-opt-env-web-run
-(Invoke-WebRequest -UseBasicParsing http://localhost:8000/health).Content
-(Invoke-WebRequest -UseBasicParsing -Method Post -Uri http://localhost:8000/reset -ContentType "application/json" -Body "{}").Content
 ```
 
-Expected:
-- `/health` returns JSON with healthy status.
-- `/reset` returns a valid observation payload.
-
-### D) Stop and clean up
+## 4. Stop and Clean Up The Container
+**Description:** Once you are done testing with Docker, you can stop and clean up the container with this command.
 
 ```bash
 docker rm -f prompt-opt-env-web-run
 ```
 
-## 6. API Endpoint Modes
+---
 
-Use HuggingFace Router (recommended):
+# 🚀 Deployment: Validating and Deploying (OpenEnv Submit)
 
-```env
-API_BASE_URL=https://router.huggingface.co/v1/
-MODEL_NAME=Qwen/Qwen2.5-72B-Instruct
-HF_TOKEN=hf_...
-```
+This section is for when you are fully done and ready to submit to the Hackathon.
 
-Use local OpenAI-compatible endpoint (vLLM/Ollama proxy/etc.):
-
-```env
-API_BASE_URL=http://localhost:8000/v1/
-MODEL_NAME=<your-local-model-name>
-HF_TOKEN=dummy_or_local_key
-```
-
-Notes:
-- Endpoint must support OpenAI Chat Completions (`/v1/chat/completions`).
-- `GRADER=rouge` avoids external grader calls and is deterministic.
-- Web UI now has a fallback output path if upstream LLM calls fail.
-- `web_app.py` accepts key aliases:
-  - token: `HF_TOKEN` (or `OPENAI_API_KEY`, `HUGGINGFACEHUB_API_TOKEN`)
-  - base URL: `API_BASE_URL` (or `OPENAI_BASE_URL`)
-  - model: `MODEL_NAME` (or `OPENAI_MODEL`)
-- `web_app.py` forces direct API calls (`trust_env=False`) to avoid broken global proxy env vars.
-
-## 7. OpenEnv Validate and Deploy
-
-From `prompt_opt_env/`:
+## 1. Validate and Push to HuggingFace
+**Description:** Use the `openenv` CLI to validate your environment setup and push it to a HuggingFace Space.
 
 ```bash
 cd prompt_opt_env
 openenv validate
 openenv push --repo-id <hf-username>/prompt-opt-env
-```
-
-Set HuggingFace Space secrets:
-
-- `API_BASE_URL`
-- `MODEL_NAME`
-- `HF_TOKEN`
-
-Post-deploy check:
-
-```bash
-curl https://<hf-username>-prompt-opt-env.hf.space/health
-```
-
-## 8. Submission Sanity Checklist
-
-- `openenv validate` passes.
-- Docker image builds successfully.
-- Docker `/health` and `/reset` respond.
-- `python inference.py` runs from repo root.
-- `inference.py` remains at repo root (not moved).
-- Space secrets are configured.
-
-## 9. Dependency Notes
-
-Current compatibility pins for container build stability:
-- `fastapi==0.115.12`
-- `pydantic==2.7.4`
-
-## 10. Fallback Troubleshooting (Web UI)
-
-If you see: `API connection failed, so offline fallback outputs were used for this run.`
-
-1. Confirm the runtime diagnostics shown below that message:
-- Token detected should be `yes`.
-- Base URL should be your intended endpoint.
-- Model should be valid for the endpoint.
-
-2. Quick key check in PowerShell:
-
-```powershell
-Get-Content .env.local | Select-String "HF_TOKEN|API_BASE_URL|MODEL_NAME"
-```
-
-3. Restart app after changing keys:
-
-```bash
-python web_app.py
 ```
