@@ -50,6 +50,14 @@ def _first_env(*keys: str, default: str = "") -> str:
     return default
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    """Parse a boolean env var."""
+    raw = (os.getenv(name) or "").strip().lower()
+    if not raw:
+        return default
+    return raw in {"1", "true", "yes", "on"}
+
+
 def _normalize_base_url(url: str) -> str:
     """Normalize endpoint URL and ensure trailing slash for client consistency."""
     clean = (url or "").strip().strip("'").strip('"')
@@ -87,6 +95,9 @@ DONE_THRESHOLD: float = float(os.getenv("DONE_THRESHOLD", "0.85"))
 MAX_STEPS: int = int(os.getenv("MAX_STEPS", "7"))
 LLM_TIMEOUT_SECONDS: float = float(os.getenv("LLM_TIMEOUT_SECONDS", "45"))
 LLM_MAX_RETRIES: int = int(os.getenv("LLM_MAX_RETRIES", "2"))
+OPTIMIZER_FAST_MODE: bool = _env_bool("OPTIMIZER_FAST_MODE", False)
+MAX_LLM_CALLS_PER_RUN: int = int(os.getenv("MAX_LLM_CALLS_PER_RUN", "18"))
+MAX_RESCUE_TRIALS: int = int(os.getenv("MAX_RESCUE_TRIALS", "10"))
 OUTPUT_TOKEN_COST: float = float(os.getenv("OUTPUT_TOKEN_COST", "1.0"))
 
 if not HF_TOKEN:
@@ -184,6 +195,8 @@ def get_llm_runtime_status() -> dict[str, Any]:
         "token_present": bool(HF_TOKEN),
         "llm_timeout_seconds": LLM_TIMEOUT_SECONDS,
         "llm_max_retries": LLM_MAX_RETRIES,
+        "optimizer_fast_mode": OPTIMIZER_FAST_MODE,
+        "max_llm_calls_per_run": MAX_LLM_CALLS_PER_RUN,
         "proxy_env_present": any(
             bool(os.getenv(name))
             for name in (
@@ -531,6 +544,15 @@ def optimize_prompt_with_state(state: dict) -> dict:
     input_data = (state.get("input", "") or "").strip()
     goal = state.get("goal", "Balanced")
 
+    effective_max_steps = MAX_STEPS
+    if OPTIMIZER_FAST_MODE:
+        if goal == "High Quality":
+            effective_max_steps = min(MAX_STEPS, 5)
+        elif goal == "Balanced":
+            effective_max_steps = min(MAX_STEPS, 4)
+        else:
+            effective_max_steps = min(MAX_STEPS, 3)
+
     # Generate a reference answer (ground truth)
     used_fallback = False
     fallback_reasons: list[str] = []
@@ -604,6 +626,7 @@ def optimize_prompt_with_state(state: dict) -> dict:
     dual_best_score = -1.0
     dual_best_tokens = 0
     dual_best_output_tokens = 0
+    dual_goal_met = False
 
     # Track cost-safe candidates that do not regress quality.
     nonreg_best_prompt = initial_prompt
@@ -615,7 +638,7 @@ def optimize_prompt_with_state(state: dict) -> dict:
     steps_taken = 0
     termination_reason = "max_steps"
 
-    for step in range(MAX_STEPS):
+    for step in range(effective_max_steps):
         steps_taken += 1
         tokens_remaining = token_budget - current_tokens
         action_id = intelligent_action_selection(
@@ -646,6 +669,10 @@ def optimize_prompt_with_state(state: dict) -> dict:
             termination_reason = "budget_exceeded"
             break
 
+        if llm_calls_attempted >= MAX_LLM_CALLS_PER_RUN:
+            termination_reason = "latency_guard"
+            break
+
         llm_calls_attempted += 1
         new_output = call_llm(
             build_inference_prompt(task, new_prompt, input_data),
@@ -668,6 +695,8 @@ def optimize_prompt_with_state(state: dict) -> dict:
                 dual_best_score = new_score
                 dual_best_tokens = new_tokens
                 dual_best_output_tokens = new_output_tokens
+                if OPTIMIZER_FAST_MODE and goal in ("Balanced", "Low Cost"):
+                    dual_goal_met = True
 
         if new_score >= initial_score and new_output_tokens <= initial_output_tokens:
             if (
@@ -723,26 +752,41 @@ def optimize_prompt_with_state(state: dict) -> dict:
         current_score = new_score
         current_tokens = new_tokens
 
+        if OPTIMIZER_FAST_MODE and dual_goal_met:
+            termination_reason = "dual_goal_met"
+            break
+
         if current_score > DONE_THRESHOLD:
             total_reward += 1.0
             termination_reason = "success"
             break
 
     # Rescue sweep: if dual-improvement not found, run a concise-focused search.
-    if not (dual_best_score > initial_score and dual_best_output_tokens < initial_output_tokens):
+    if (
+        not (dual_best_score > initial_score and dual_best_output_tokens < initial_output_tokens)
+        and llm_calls_attempted < MAX_LLM_CALLS_PER_RUN
+    ):
         if initial_output_tokens > 1:
             rescue_token_cap = max(8, min(optimized_output_cap, initial_output_tokens - 1))
             seen_prompts = {initial_prompt, best_prompt, current_prompt}
             rescue_word_target = max(12, int(initial_output_tokens * 0.75))
+            rescue_trials = 0
 
             # Explicit dual-objective prompts to improve chance of quality-up + cost-down.
-            for crafted_prompt in (
+            crafted_candidates = [
                 f"{best_prompt}\nRequirement: Improve quality and factual clarity while staying under {rescue_word_target} words. Use only essential details.",
                 f"{initial_prompt}\nRequirement: Produce a better answer than baseline under {rescue_word_target} words. Keep it concise and accurate.",
-            ):
+            ]
+            if OPTIMIZER_FAST_MODE:
+                crafted_candidates = crafted_candidates[:1]
+
+            for crafted_prompt in crafted_candidates:
+                if llm_calls_attempted >= MAX_LLM_CALLS_PER_RUN or rescue_trials >= MAX_RESCUE_TRIALS:
+                    break
                 if crafted_prompt in seen_prompts:
                     continue
                 seen_prompts.add(crafted_prompt)
+                rescue_trials += 1
 
                 llm_calls_attempted += 1
                 crafted_output = call_llm(
@@ -786,14 +830,23 @@ def optimize_prompt_with_state(state: dict) -> dict:
                         nonreg_best_tokens = crafted_tokens
                         nonreg_best_output_tokens = crafted_output_tokens
 
-            for base_prompt in (best_prompt, current_prompt, initial_prompt):
-                for rescue_action in (4, 1, 3, 2):
+            rescue_base_prompts = (best_prompt, current_prompt, initial_prompt)
+            rescue_actions = (4, 1, 3, 2)
+            if OPTIMIZER_FAST_MODE:
+                rescue_base_prompts = (best_prompt, initial_prompt)
+                rescue_actions = (4, 1)
+
+            for base_prompt in rescue_base_prompts:
+                for rescue_action in rescue_actions:
+                    if llm_calls_attempted >= MAX_LLM_CALLS_PER_RUN or rescue_trials >= MAX_RESCUE_TRIALS:
+                        break
                     candidate_prompt = apply_action_for_web(
                         rescue_action, task, base_prompt, input_data, "Low Cost"
                     )
                     if not candidate_prompt or candidate_prompt in seen_prompts:
                         continue
                     seen_prompts.add(candidate_prompt)
+                    rescue_trials += 1
 
                     llm_calls_attempted += 1
                     candidate_output = call_llm(
@@ -836,6 +889,9 @@ def optimize_prompt_with_state(state: dict) -> dict:
                             nonreg_best_score = candidate_score
                             nonreg_best_tokens = candidate_tokens
                             nonreg_best_output_tokens = candidate_output_tokens
+
+                if llm_calls_attempted >= MAX_LLM_CALLS_PER_RUN or rescue_trials >= MAX_RESCUE_TRIALS:
+                    break
 
     final_output_tokens = count_tokens(best_output)
 
