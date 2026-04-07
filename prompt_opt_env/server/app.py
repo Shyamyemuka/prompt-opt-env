@@ -21,6 +21,25 @@ app = create_app(
     max_concurrent_envs=1,
 )
 
+# ── Mount custom Web UI for HuggingFace deployment ───────────────────────────
+import sys
+import os
+REPO_ROOT = "/app/env" if os.path.exists("/app/env/web_app.py") else os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if REPO_ROOT not in sys.path:
+    sys.path.insert(0, REPO_ROOT)
+
+try:
+    from web_app import landing, home, optimize, _write_templates
+    from fastapi.responses import HTMLResponse
+    _write_templates()
+    app.get("/", response_class=HTMLResponse)(landing)
+    app.get("/app", response_class=HTMLResponse)(home)
+    app.post("/optimize", response_class=HTMLResponse)(optimize)
+    print("[INFO] Successfully mounted Custom Dark UI on /")
+except Exception as e:
+    print(f"[WARNING] Web UI could not be mounted: {e}")
+
+
 
 def main(host: str = "0.0.0.0", port: int = 8000):
     """Entry point for direct execution via uv run or python -m."""
