@@ -1516,6 +1516,58 @@ def _write_index_html(tpl_dir: str):
     }
     @keyframes spin { 100% { transform: rotate(360deg); } }
     .hidden { display: none !important; }
+    .loading-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 100;
+      background: rgba(0, 0, 0, 0.72);
+      backdrop-filter: blur(6px);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 1rem;
+    }
+    .loading-card {
+      width: 100%;
+      max-width: 26rem;
+      border-radius: 1rem;
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      background: rgba(5, 5, 5, 0.95);
+      padding: 1.25rem;
+      box-shadow: 0 25px 50px rgba(0, 0, 0, 0.45);
+    }
+    .loading-ring {
+      width: 2.75rem;
+      height: 2.75rem;
+      border-radius: 9999px;
+      border: 2px solid rgba(255, 255, 255, 0.16);
+      border-top-color: #60a5fa;
+      border-right-color: #f87171;
+      animation: spin 0.9s linear infinite;
+      flex-shrink: 0;
+    }
+    .loading-track {
+      margin-top: 0.9rem;
+      height: 0.35rem;
+      width: 100%;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.08);
+      overflow: hidden;
+      position: relative;
+    }
+    .loading-track::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      width: 42%;
+      border-radius: 999px;
+      background: linear-gradient(90deg, #60a5fa, #818cf8, #f87171);
+      animation: slide 1.2s ease-in-out infinite;
+    }
+    @keyframes slide {
+      0% { transform: translateX(-110%); }
+      100% { transform: translateX(260%); }
+    }
 </style>
 <style>
 
@@ -1557,7 +1609,7 @@ def _write_index_html(tpl_dir: str):
 <!-- BEGIN: Main Form Container -->
 <main class="w-full max-w-2xl glow-border">
 <div class="glow-border-inner p-8 shadow-2xl">
-<form action="/optimize" class="space-y-6" method="POST">
+<form action="/optimize" class="space-y-6" method="POST" id="optimizer-form">
 <!-- Select Task -->
 <div data-purpose="form-group">
 <label class="block text-sm font-medium text-gray-300 mb-2" for="task">Select Task</label>
@@ -1612,20 +1664,37 @@ def _write_index_html(tpl_dir: str):
 </div>
 <!-- Submit Button -->
 <div class="pt-4">
-<button class="w-full bg-black border border-gray-600 rounded-full py-3 px-4 text-sm font-medium text-white hover:bg-gray-900 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-500 focus:ring-offset-black transition-colors duration-200" type="submit">
-            Optimize Prompt
+<button id="optimize-submit-btn" class="w-full bg-black border border-gray-600 rounded-full py-3 px-4 text-sm font-medium text-white hover:bg-gray-900 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-500 focus:ring-offset-black transition-colors duration-200 disabled:opacity-60 disabled:cursor-not-allowed" type="submit">
+<span id="optimize-submit-text">Optimize Prompt</span>
 </button>
 </div>
 </form>
 </div>
 </main>
 <!-- END: Main Form Container -->
+<div id="loading-overlay" class="loading-overlay hidden" aria-live="polite" aria-busy="true" aria-label="Optimizing prompt">
+    <div class="loading-card">
+        <div class="flex items-center gap-4">
+            <div class="loading-ring"></div>
+            <div>
+                <div class="text-white font-semibold tracking-tight">Optimizing Prompt</div>
+                <div class="text-sm text-gray-400">Running prompt search and scoring responses...</div>
+            </div>
+        </div>
+        <div class="loading-track"></div>
+    </div>
+</div>
 <script>
+    const optimizeForm = document.getElementById("optimizer-form");
+    const submitBtn = document.getElementById("optimize-submit-btn");
+    const submitText = document.getElementById("optimize-submit-text");
+    const loadingOverlay = document.getElementById("loading-overlay");
     const taskField = document.getElementById("task");
     const genericInputGroup = document.getElementById("generic-input-group");
     const genericInputLabel = document.getElementById("generic-input-label");
     const genericInput = document.getElementById("input-text");
     const qaInputGroup = document.getElementById("qa-input-group");
+    let submitLocked = false;
 
     const inputConfig = {
         "Summarization": { label: "Input Text", placeholder: "Paste the paragraph you want to summarize..." },
@@ -1649,22 +1718,57 @@ def _write_index_html(tpl_dir: str):
     taskField.addEventListener("change", updateTaskInputs);
     updateTaskInputs();
 
-    document.querySelector('form').addEventListener('submit', function(e) {
+    function setLoadingState(active) {
+        if (active) {
+            loadingOverlay.classList.remove('hidden');
+            document.body.classList.add('overflow-hidden');
+            submitBtn.disabled = true;
+            submitText.textContent = 'Optimizing...';
+            return;
+        }
+        loadingOverlay.classList.add('hidden');
+        document.body.classList.remove('overflow-hidden');
+        submitBtn.disabled = false;
+        submitText.textContent = 'Optimize Prompt';
+    }
+
+    window.addEventListener('pageshow', function() {
+        submitLocked = false;
+        setLoadingState(false);
+    });
+
+    optimizeForm.addEventListener('submit', function(e) {
+        if (submitLocked) {
+            e.preventDefault();
+            return;
+        }
+
         const selected = taskField.value;
+        let isValid = true;
         if (selected === "Question Answering") {
             const ctx = document.getElementById('context').value.trim();
             const q = document.getElementById('question').value.trim();
             if (!ctx && !q) {
                 e.preventDefault();
                 alert('Please provide Context or a Question before optimizing.');
+                isValid = false;
             }
         } else {
             const txt = document.getElementById('input-text').value.trim();
             if (!txt) {
                 e.preventDefault();
                 alert('Please provide Input Text before optimizing.');
+                isValid = false;
             }
         }
+
+        if (!isValid) {
+            setLoadingState(false);
+            return;
+        }
+
+        submitLocked = true;
+        setLoadingState(true);
     });
 </script>
 </body></html>"""

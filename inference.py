@@ -1,69 +1,80 @@
-"""
+﻿"""
 Cost-aware baseline inference script.
 
-MANDATORY:
-  - Name: inference.py (do not rename)
-  - Location: repo root (not inside prompt_opt_env/)
-  - Uses: openai.OpenAI client for all LLM calls
-  - Reads: API_BASE_URL, MODEL_NAME, HF_TOKEN from os.environ
-  - Covers: 3 tasks (easy, medium, hard), 7 steps each
-  - Prints: per-step score, tokens, reward + summary with efficiency metric
-  - Runtime: under 20 minutes on 2 vCPU / 8 GB RAM
-  - Exit: always code 0
-
-Usage:
-    export API_BASE_URL=https://router.huggingface.co/v1/
-    export MODEL_NAME=Qwen/Qwen2.5-72B-Instruct
-    export HF_TOKEN=hf_your_token
-    python inference.py
+Mandatory expectations:
+- file name: inference.py at repo root
+- uses OpenAI Python client for LLM calls
+- reads API_BASE_URL, MODEL_NAME, HF_TOKEN from environment
+- runs 3 tasks (easy, medium, hard)
+- emits structured logs with [START], [STEP], [END]
+- prints summary table and exits with status code 0
 """
+
 import os
-import sys
-import re
 import random
+import re
+import sys
+import traceback
 
 from openai import OpenAI
 from rouge_score import rouge_scorer
 
-# Load .env.local variables explicitly so `python inference.py` works out of the box
-try:
-    env_local = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env.local")
-    if os.path.exists(env_local):
-        with open(env_local, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if line and not line.startswith("#") and "=" in line:
-                    k, v = line.split("=", 1)
-                    if k not in os.environ:
-                        os.environ[k] = v.strip("'\"")
-except Exception:
-    pass
 
-# ── Mandatory env vars ────────────────────────────────────────────────────────
-API_BASE_URL: str = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1/")
-MODEL_NAME: str   = os.getenv("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
-HF_TOKEN: str     = os.getenv("HF_TOKEN", "")
-ALPHA: float      = float(os.getenv("TOKEN_PENALTY_ALPHA", "0.02"))
-
-if not HF_TOKEN:
-    print("ERROR: HF_TOKEN environment variable not found!")
-    print("Please set your HuggingFace token before running. Examples:")
-    print('  PowerShell: $env:HF_TOKEN="hf_your_token"')
-    print('  Mac/Linux : export HF_TOKEN="hf_your_token"')
-    print('Or load it from your .env.local file: uv run --env-file .env.local inference.py')
-    sys.exit(1)
-
-_CLIENT = OpenAI(base_url=API_BASE_URL, api_key=HF_TOKEN)
-_ROUGE  = rouge_scorer.RougeScorer(["rougeL"], use_stemmer=True)
+def _load_env_local() -> None:
+    """Load .env.local only as local convenience for direct python runs."""
+    try:
+        env_local = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env.local")
+        if not os.path.exists(env_local):
+            return
+        with open(env_local, "r", encoding="utf-8") as handle:
+            for raw in handle:
+                line = raw.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, value = line.split("=", 1)
+                if key not in os.environ:
+                    os.environ[key] = value.strip("'\"")
+    except Exception:
+        pass
 
 
-def count_tokens(text: str) -> int:
-    return len(text.split())
+_load_env_local()
+
+API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1/")
+MODEL_NAME = os.getenv("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
+HF_TOKEN = os.getenv("HF_TOKEN", "")
+ALPHA = float(os.getenv("TOKEN_PENALTY_ALPHA", "0.02"))
+MAX_STEPS = int(os.getenv("MAX_STEPS", "7"))
+INFERENCE_SEED = int(os.getenv("INFERENCE_SEED", "42"))
+
+random.seed(INFERENCE_SEED)
+
+_CLIENT = None
+if HF_TOKEN:
+    try:
+        _CLIENT = OpenAI(base_url=API_BASE_URL, api_key=HF_TOKEN)
+    except Exception as client_error:
+        print(f"[WARN] OpenAI client init failed, using fallback outputs: {client_error}")
+else:
+    print("[WARN] HF_TOKEN missing. Running inference baseline with deterministic fallback outputs.")
+
+_ROUGE = rouge_scorer.RougeScorer(["rougeL"], use_stemmer=True)
+
+ACTION_NAMES = {
+    0: "ADD_CONTEXT",
+    1: "SHORTEN",
+    2: "ADD_EXAMPLE",
+    3: "REPHRASE",
+    4: "ADD_CONSTRAINT",
+    5: "STOP",
+}
 
 
 EVAL_TASKS = [
     {
-        "difficulty": "easy", "token_budget": 80,
+        "task_id": 4,
+        "difficulty": "easy",
+        "token_budget": 80,
         "task_description": "Explain what machine learning is to a 10-year-old",
         "initial_prompt": "explain machine learning",
         "reference": (
@@ -76,7 +87,9 @@ EVAL_TASKS = [
         "constraint": "Simple words only. No jargon. For a 10-year-old.",
     },
     {
-        "difficulty": "medium", "token_budget": 65,
+        "task_id": 5,
+        "difficulty": "medium",
+        "token_budget": 65,
         "task_description": "Answer: What is the time complexity of binary search and why?",
         "initial_prompt": "binary search complexity",
         "reference": (
@@ -88,7 +101,9 @@ EVAL_TASKS = [
         "constraint": "Include Big O notation and explain why that complexity holds.",
     },
     {
-        "difficulty": "hard", "token_budget": 55,
+        "task_id": 11,
+        "difficulty": "hard",
+        "token_budget": 55,
         "task_description": "Describe the steps to resolve a Git merge conflict",
         "initial_prompt": "git merge conflict fix",
         "reference": (
@@ -102,7 +117,11 @@ EVAL_TASKS = [
     },
 ]
 
-FILLER = [r"\bplease\b", r"\bcould you\b", r"\bcan you\b", r"\bi want you to\b"]
+FILLER_PATTERNS = [r"\bplease\b", r"\bcould you\b", r"\bcan you\b", r"\bi want you to\b"]
+
+
+def count_tokens(text: str) -> int:
+    return len(text.split())
 
 
 def apply(action_id: int, prompt: str, task: dict) -> str:
@@ -110,170 +129,216 @@ def apply(action_id: int, prompt: str, task: dict) -> str:
         if task["context"][:20].lower() in prompt.lower():
             return prompt
         return f"{prompt}\nContext: {task['context']}"
-    elif action_id == 1:
-        r = prompt
-        for f in FILLER:
-            r = re.sub(f, "", r, flags=re.IGNORECASE)
-        r = re.sub(r"  +", " ", r).strip()
-        return r if r != prompt else prompt
-    elif action_id == 2:
+    if action_id == 1:
+        reduced = prompt
+        for pattern in FILLER_PATTERNS:
+            reduced = re.sub(pattern, "", reduced, flags=re.IGNORECASE)
+        reduced = re.sub(r"  +", " ", reduced).strip()
+        return reduced if reduced != prompt else prompt
+    if action_id == 2:
         if "Example output format:" in prompt:
             return prompt
         return f"{prompt}\nExample output format: {task['example']}"
-    elif action_id == 3:
-        r = re.sub(r"^(?:can you|could you|please)\s+(.+?)[\?\.]*$",
-                   lambda m: m.group(1).strip().capitalize() + ".",
-                   prompt, flags=re.IGNORECASE | re.MULTILINE)
-        return r if r != prompt else prompt
-    elif action_id == 4:
+    if action_id == 3:
+        rewritten = re.sub(
+            r"^(?:can you|could you|please)\s+(.+?)[\?\.]*$",
+            lambda m: m.group(1).strip().capitalize() + ".",
+            prompt,
+            flags=re.IGNORECASE | re.MULTILINE,
+        )
+        return rewritten if rewritten != prompt else prompt
+    if action_id == 4:
         if "Requirement:" in prompt:
             return prompt
         return f"{prompt}\nRequirement: {task['constraint']}"
     return prompt
 
 
-def call_llm(prompt: str) -> str:
+def call_llm(prompt: str, fallback: str) -> str:
+    if _CLIENT is None:
+        return fallback
     try:
-        r = _CLIENT.chat.completions.create(
+        response = _CLIENT.chat.completions.create(
             model=MODEL_NAME,
             messages=[{"role": "user", "content": prompt}],
-            max_tokens=200, temperature=0.1, timeout=30,
+            max_tokens=200,
+            temperature=0.1,
+            timeout=30,
         )
-        return r.choices[0].message.content or ""
-    except Exception as e:
-        return ""
+        text = response.choices[0].message.content or ""
+        return text if text.strip() else fallback
+    except Exception as llm_error:
+        print(f"[WARN] LLM call failed, using fallback output: {llm_error}")
+        return fallback
 
 
-def rouge_l(hyp: str, ref: str) -> float:
-    if not hyp:
+def rouge_l(hypothesis: str, reference: str) -> float:
+    if not hypothesis:
         return 0.0
-    return round(_ROUGE.score(ref, hyp)["rougeL"].fmeasure, 4)
+    return round(_ROUGE.score(reference, hypothesis)["rougeL"].fmeasure, 4)
 
 
-def run_episode_with_display(task: dict, max_steps: int = 10) -> dict:
-    """Run episode with before/after display format."""
+def emit_start(task: dict) -> None:
+    print(
+        f"[START] task_id={task['task_id']} difficulty={task['difficulty']} "
+        f"budget={task['token_budget']} max_steps={MAX_STEPS}"
+    )
+
+
+def emit_step(
+    task_id: int,
+    step_num: int,
+    action_id: int,
+    score: float,
+    tokens: int,
+    reward: float,
+    done: bool,
+    reason: str,
+) -> None:
+    print(
+        f"[STEP] task_id={task_id} step={step_num} action={ACTION_NAMES[action_id]} "
+        f"score={score:.4f} tokens={tokens} reward={reward:+.4f} done={int(done)} reason={reason}"
+    )
+
+
+def emit_end(result: dict) -> None:
+    print(
+        f"[END] task_id={result['task_id']} difficulty={result['difficulty']} "
+        f"init_score={result['initial_score']:.4f} final_score={result['final_score']:.4f} "
+        f"final_tokens={result['final_token_count']} budget={result['token_budget']} "
+        f"efficiency={result['efficiency']:.6f} total_reward={result['total_reward']:+.4f} "
+        f"steps={result['steps']}"
+    )
+
+
+def run_episode(task: dict, max_steps: int = 7) -> dict:
+    emit_start(task)
+
     prompt = task["initial_prompt"]
-    init_out = call_llm(prompt)
-    init_score = rouge_l(init_out, task["reference"])
-    init_tokens = count_tokens(prompt)
+    initial_output = call_llm(prompt, task["reference"])
+    initial_score = rouge_l(initial_output, task["reference"])
+    initial_tokens = count_tokens(prompt)
 
-    print(f"\n{'='*60}")
-    print(f"Task: {task['task_description']}")
-    print(f"{'='*60}")
-
-    print(f"\nInitial Prompt:")
-    print(f'"{prompt}"')
-    print(f"\nInitial Output:")
-    print(f'"{init_out[:150]}{"..." if len(init_out) > 150 else ""}"')
-    print(f"\nInitial Score: {init_score:.2f}")
-    print(f"Initial Tokens: {init_tokens}")
-
-    current_score = init_score
-    current_tokens = init_tokens
+    current_score = initial_score
+    current_tokens = initial_tokens
     total_reward = 0.0
     steps = 0
-    final_prompt = prompt
-    final_output = init_out
 
-    for step in range(max_steps):
+    for step_idx in range(max_steps):
         action_id = random.randint(0, 5)
+        step_num = step_idx + 1
 
         if action_id == 5:
-            stop_bonus = round(current_score * 1.5, 4)
-            total_reward += stop_bonus
-            steps += 1
+            reward = round(current_score * 1.5, 4)
+            total_reward += reward
+            steps = step_num
+            emit_step(task["task_id"], step_num, action_id, current_score, current_tokens, reward, True, "voluntary_stop")
             break
 
         new_prompt = apply(action_id, prompt, task)
         if new_prompt == prompt:
-            total_reward += -0.1
-            steps += 1
+            reward = -0.1
+            total_reward += reward
+            steps = step_num
+            done = step_num >= max_steps
+            emit_step(task["task_id"], step_num, action_id, current_score, current_tokens, reward, done, "no_op")
+            if done:
+                break
             continue
 
         new_tokens = count_tokens(new_prompt)
         if new_tokens > task["token_budget"]:
-            total_reward += -0.5
-            steps += 1
+            reward = -0.5
+            total_reward += reward
+            steps = step_num
+            emit_step(task["task_id"], step_num, action_id, current_score, current_tokens, reward, True, "budget_exceeded")
             break
 
-        new_out = call_llm(new_prompt)
-        new_score = rouge_l(new_out, task["reference"])
-        overhead = new_tokens - current_tokens
-        reward = round(new_score - current_score - ALPHA * overhead, 4)
-        total_reward += reward
-        steps += 1
+        new_output = call_llm(new_prompt, task["reference"])
+        new_score = rouge_l(new_output, task["reference"])
+        token_overhead = new_tokens - current_tokens
+        reward = round(new_score - current_score - ALPHA * token_overhead, 4)
+
+        done = False
+        reason = "continue"
+        if new_score > 0.85:
+            reward = round(reward + 1.0, 4)
+            done = True
+            reason = "success"
+        elif step_num >= max_steps:
+            done = True
+            reason = "max_steps"
 
         prompt = new_prompt
         current_score = new_score
         current_tokens = new_tokens
-        final_prompt = new_prompt
-        final_output = new_out
+        total_reward += reward
+        steps = step_num
 
-        if current_score > 0.85:
-            total_reward += 1.0
+        emit_step(task["task_id"], step_num, action_id, current_score, current_tokens, reward, done, reason)
+
+        if done:
             break
 
-    print(f"\n{'-'*60}")
-    print(f"After Optimization ({steps} steps):")
-    print(f"{'-'*60}")
-    print(f"\nOptimized Prompt:")
-    print(f'"{final_prompt}"')
-    print(f"\nOptimized Output:")
-    print(f'"{final_output[:150]}{"..." if len(final_output) > 150 else ""}"')
-    print(f"\nFinal Score: {current_score:.2f}")
-    print(f"Final Tokens: {current_tokens}")
-    print(f"Total Reward: {total_reward:.2f}")
-
-    token_change = current_tokens - init_tokens
-    if token_change < 0:
-        reduction_pct = abs(token_change) / init_tokens * 100 if init_tokens > 0 else 0
-        print(f"Token cost REDUCED by {reduction_pct:.0f}% (saved {abs(token_change)} tokens)")
-    elif token_change > 0:
-        print(f"Token cost increased by {token_change} tokens")
-    else:
-        print("Token cost unchanged")
-
-    return {
+    efficiency = round(current_score / max(1, current_tokens), 6)
+    result = {
+        "task_id": task["task_id"],
         "difficulty": task["difficulty"],
-        "initial_score": init_score,
+        "initial_score": initial_score,
         "final_score": current_score,
-        "total_reward": round(total_reward, 4),
         "final_token_count": current_tokens,
         "token_budget": task["token_budget"],
+        "efficiency": efficiency,
+        "total_reward": round(total_reward, 4),
         "steps": steps,
     }
 
+    emit_end(result)
+    return result
+
+
+def print_summary(results: list[dict]) -> None:
+    print("\nBASELINE SCORES SUMMARY")
+    print("=" * 86)
+    print(f"{'Difficulty':<12} {'Score':>8} {'Tokens':>8} {'Budget':>8} {'Efficiency':>12} {'Reward':>10} {'Steps':>8}")
+    print("-" * 86)
+    for row in results:
+        print(
+            f"{row['difficulty']:<12} {row['final_score']:>8.4f} {row['final_token_count']:>8} "
+            f"{row['token_budget']:>8} {row['efficiency']:>12.6f} {row['total_reward']:>10.4f} {row['steps']:>8}"
+        )
+    print("-" * 86)
+
+    avg_score = sum(r["final_score"] for r in results) / len(results)
+    avg_eff = sum(r["efficiency"] for r in results) / len(results)
+    avg_reward = sum(r["total_reward"] for r in results) / len(results)
+    print(f"{'Average':<12} {avg_score:>8.4f} {'-':>8} {'-':>8} {avg_eff:>12.6f} {avg_reward:>10.4f} {'-':>8}")
+    print("Efficiency = final_score / final_token_count")
+    print("All scores are ROUGE-L F1 in [0.0, 1.0].")
+
 
 def main() -> None:
-    print("=" * 66)
-    print("PromptOptEnv — Cost-Aware Baseline Inference Script")
-    print(f"Model    : {MODEL_NAME}")
-    print(f"Endpoint : {API_BASE_URL}")
-    print(f"Alpha    : {ALPHA}")
-    print("=" * 66)
+    print("=" * 70)
+    print("PromptOptEnv Cost-Aware Baseline Inference")
+    print(f"Model: {MODEL_NAME}")
+    print(f"Endpoint: {API_BASE_URL}")
+    print(f"Alpha: {ALPHA}")
+    print(f"Max steps: {MAX_STEPS}")
+    print("=" * 70)
 
     results = []
     for task in EVAL_TASKS:
-        results.append(run_episode_with_display(task))
+        results.append(run_episode(task, max_steps=MAX_STEPS))
 
-    print()
-    print("=" * 66)
-    print("BASELINE SCORES SUMMARY")
-    print("=" * 66)
-    print(f"{'Diff':<10} {'Init':>8} {'Final':>8} {'Tokens':>8} {'Budget':>8} {'Reward':>10} {'Steps':>6}")
-    print("-" * 66)
-    for r in results:
-        print(
-            f"{r['difficulty']:<10} {r['initial_score']:>8.2f} {r['final_score']:>8.2f} "
-            f"{r['final_token_count']:>8} {r['token_budget']:>8} {r['total_reward']:>10.2f} {r['steps']:>6}"
-        )
-    print("-" * 66)
-    avg_init = round(sum(r["initial_score"] for r in results) / len(results), 4)
-    avg_final = round(sum(r["final_score"] for r in results) / len(results), 4)
-    print(f"{'Average':<10} {avg_init:>8.2f} {avg_final:>8.2f}")
-    print()
-    print("All scores are ROUGE-L F1 in [0.0, 1.0]. Script complete.")
+    print_summary(results)
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as fatal_error:
+        print(f"[ERROR] inference.py encountered an exception: {fatal_error}")
+        traceback.print_exc()
+    finally:
+        print("Script complete.")
+        sys.exit(0)

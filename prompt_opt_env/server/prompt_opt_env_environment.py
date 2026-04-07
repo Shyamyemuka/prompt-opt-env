@@ -135,7 +135,9 @@ class PromptOptEnvEnvironment(Environment):
             RuntimeError: If reset() has not been called.
         """
         if self._task is None:
-            raise RuntimeError("reset() must be called before step().")
+            # Some validation probes call /step without a persisted session.
+            # Auto-reset keeps the endpoint robust while preserving normal behavior.
+            self.reset()
 
         task_id = self._task.task_id
 
