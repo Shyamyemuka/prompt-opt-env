@@ -38,7 +38,6 @@ from prompt_opt_env.server.actions import (
 )
 from prompt_opt_env.llm_router import create_default_router
 from openai import OpenAI
-import httpx
 from rouge_score import rouge_scorer
 
 # ── Environment variables (loaded from .env.local above) ─────────────────────
@@ -136,8 +135,7 @@ def get_client(base_url: str | None = None):
             base_url=target_base_url,
             api_key=HF_TOKEN,
             max_retries=LLM_MAX_RETRIES,
-            # Ignore broken shell proxy env vars so API keys/base URL can work directly.
-            http_client=httpx.Client(trust_env=False, timeout=LLM_TIMEOUT_SECONDS + 5),
+            timeout=LLM_TIMEOUT_SECONDS + 5,
         )
     return _CLIENTS[target_base_url]
 

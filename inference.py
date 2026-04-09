@@ -14,11 +14,10 @@ import os
 import random
 import re
 import sys
-import traceback
 from types import SimpleNamespace
 
+from openai import OpenAI
 from rouge_score import rouge_scorer
-from prompt_opt_env.llm_router import create_default_router
 
 
 def _load_env_local() -> None:
@@ -43,9 +42,10 @@ _load_env_local()
 
 API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1/")
 MODEL_NAME = os.getenv("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
-HF_TOKEN = os.getenv("HF_TOKEN", "")
-API_KEY = OPENAI_API_KEY or HF_TOKEN
+HF_TOKEN = os.getenv("HF_TOKEN")
+LOCAL_IMAGE_NAME = os.getenv("LOCAL_IMAGE_NAME")
+API_KEY = HF_TOKEN or os.getenv("API_KEY")
+BENCHMARK = os.getenv("BENCHMARK_NAME", "prompt_opt_env")
 ALPHA = float(os.getenv("TOKEN_PENALTY_ALPHA", "0.02"))
 MAX_STEPS = int(os.getenv("MAX_STEPS", "7"))
 INFERENCE_SEED = int(os.getenv("INFERENCE_SEED", "42"))
@@ -63,15 +63,13 @@ except Exception:
         _INTELLIGENT_ACTIONS_AVAILABLE = False
 
 random.seed(INFERENCE_SEED)
-
-_LLM_ROUTER = create_default_router(
-    default_model=MODEL_NAME,
-    default_base_url=API_BASE_URL,
-    timeout_seconds=float(os.getenv("LLM_TIMEOUT_SECONDS", "30")),
-    max_retries=int(os.getenv("LLM_MAX_RETRIES", "2")),
-)
-if not _LLM_ROUTER.has_provider():
-    print("[WARN] No provider key found (OPENAI_API_KEY/GEMINI_API_KEY/HF_TOKEN). Running with deterministic fallback outputs.")
+_OPENAI_CLIENT = None
+if API_KEY:
+    _OPENAI_CLIENT = OpenAI(
+        base_url=API_BASE_URL,
+        api_key=API_KEY,
+        max_retries=int(os.getenv("LLM_MAX_RETRIES", "2")),
+    )
 
 _ROUGE = rouge_scorer.RougeScorer(["rougeL"], use_stemmer=True)
 
@@ -185,17 +183,20 @@ def apply_intelligent(action_id: int, prompt: str, task: dict) -> str:
 
 
 def call_llm(prompt: str, fallback: str) -> str:
-    if not _LLM_ROUTER.has_provider():
+    if _OPENAI_CLIENT is None:
         return fallback
-    text = _LLM_ROUTER.complete(
-        messages=[{"role": "user", "content": prompt}],
-        max_tokens=200,
-        temperature=0.1,
-    )
-    if text.strip():
-        return text
-    if _LLM_ROUTER.last_error:
-        print(f"[WARN] LLM call failed, using fallback output: {_LLM_ROUTER.last_error}")
+    try:
+        completion = _OPENAI_CLIENT.chat.completions.create(
+            model=MODEL_NAME,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=200,
+            temperature=0.1,
+        )
+        text = (completion.choices[0].message.content or "").strip()
+        if text:
+            return text
+    except Exception as exc:
+        _ = exc
         return fallback
     return fallback
 
@@ -209,41 +210,37 @@ def rouge_l(hypothesis: str, reference: str) -> float:
 
 
 def emit_start(task: dict) -> None:
-    print(
-        f"[START] task_id={task['task_id']} difficulty={task['difficulty']} "
-        f"budget={task['token_budget']} max_steps={MAX_STEPS}"
-    )
+    task_name = f"task_{task['task_id']}_{task['difficulty']}"
+    print(f"[START] task={task_name} env={BENCHMARK} model={MODEL_NAME}", flush=True)
 
 
 def emit_step(
-    task_id: int,
     step_num: int,
     action_id: int,
-    score: float,
-    tokens: int,
     reward: float,
     done: bool,
-    reason: str,
+    error: str | None = None,
 ) -> None:
+    done_val = str(done).lower()
+    error_val = error if error else "null"
     print(
-        f"[STEP] task_id={task_id} step={step_num} action={ACTION_NAMES[action_id]} "
-        f"score={score:.4f} tokens={tokens} reward={reward:+.4f} done={int(done)} reason={reason}"
+        f"[STEP] step={step_num} action={ACTION_NAMES[action_id]} "
+        f"reward={reward:.2f} done={done_val} error={error_val}",
+        flush=True,
     )
 
 
 def emit_end(result: dict) -> None:
+    rewards_str = ",".join(f"{r:.2f}" for r in result["rewards"])
     print(
-        f"[END] task_id={result['task_id']} difficulty={result['difficulty']} "
-        f"init_score={result['initial_score']:.4f} final_score={result['final_score']:.4f} "
-        f"final_tokens={result['final_token_count']} budget={result['token_budget']} "
-        f"efficiency={result['efficiency']:.6f} total_reward={result['total_reward']:+.4f} "
-        f"steps={result['steps']}"
+        f"[END] success={str(result['success']).lower()} steps={result['steps']} "
+        f"score={result['final_score']:.4f} rewards={rewards_str}",
+        flush=True,
     )
 
 
 def run_episode(task: dict, max_steps: int = 7) -> dict:
     emit_start(task)
-
     prompt = task["initial_prompt"]
     initial_output = call_llm(prompt, task["reference"])
     initial_score = rouge_l(initial_output, task["reference"])
@@ -252,68 +249,8 @@ def run_episode(task: dict, max_steps: int = 7) -> dict:
     current_score = initial_score
     current_tokens = initial_tokens
     total_reward = 0.0
+    rewards: list[float] = []
     steps = 0
-
-    for step_idx in range(max_steps):
-        action_id = random.randint(0, 5)
-        step_num = step_idx + 1
-
-        if action_id == 5:
-            reward = round(current_score * 1.5, 4)
-            total_reward += reward
-            steps = step_num
-            emit_step(task["task_id"], step_num, action_id, current_score, current_tokens, reward, True, "voluntary_stop")
-            break
-
-        if USE_INTELLIGENT_ACTIONS and _INTELLIGENT_ACTIONS_AVAILABLE:
-            new_prompt = apply_intelligent(action_id, prompt, task)
-        else:
-            new_prompt = apply(action_id, prompt, task)
-        if new_prompt == prompt:
-            reward = -0.1
-            total_reward += reward
-            steps = step_num
-            done = step_num >= max_steps
-            emit_step(task["task_id"], step_num, action_id, current_score, current_tokens, reward, done, "no_op")
-            if done:
-                break
-            continue
-
-        new_tokens = count_tokens(new_prompt)
-        if new_tokens > task["token_budget"]:
-            reward = -0.5
-            total_reward += reward
-            steps = step_num
-            emit_step(task["task_id"], step_num, action_id, current_score, current_tokens, reward, True, "budget_exceeded")
-            break
-
-        new_output = call_llm(new_prompt, task["reference"])
-        new_score = rouge_l(new_output, task["reference"])
-        token_overhead = new_tokens - current_tokens
-        reward = round(new_score - current_score - ALPHA * token_overhead, 4)
-
-        done = False
-        reason = "continue"
-        if new_score > 0.85:
-            reward = round(reward + 1.0, 4)
-            done = True
-            reason = "success"
-        elif step_num >= max_steps:
-            done = True
-            reason = "max_steps"
-
-        prompt = new_prompt
-        current_score = new_score
-        current_tokens = new_tokens
-        total_reward += reward
-        steps = step_num
-
-        emit_step(task["task_id"], step_num, action_id, current_score, current_tokens, reward, done, reason)
-
-        if done:
-            break
-
-    efficiency = round(current_score / max(1, current_tokens), 6)
     result = {
         "task_id": task["task_id"],
         "difficulty": task["difficulty"],
@@ -321,45 +258,95 @@ def run_episode(task: dict, max_steps: int = 7) -> dict:
         "final_score": current_score,
         "final_token_count": current_tokens,
         "token_budget": task["token_budget"],
-        "efficiency": efficiency,
-        "total_reward": round(total_reward, 4),
-        "steps": steps,
+        "efficiency": round(current_score / max(1, current_tokens), 6),
+        "total_reward": 0.0,
+        "rewards": rewards,
+        "success": False,
+        "steps": 0,
     }
 
-    emit_end(result)
+    try:
+        for step_idx in range(max_steps):
+            action_id = random.randint(0, 5)
+            step_num = step_idx + 1
+
+            if action_id == 5:
+                reward = round(current_score * 1.5, 4)
+                total_reward += reward
+                rewards.append(reward)
+                steps = step_num
+                emit_step(step_num, action_id, reward, True, None)
+                break
+
+            if USE_INTELLIGENT_ACTIONS and _INTELLIGENT_ACTIONS_AVAILABLE:
+                new_prompt = apply_intelligent(action_id, prompt, task)
+            else:
+                new_prompt = apply(action_id, prompt, task)
+            if new_prompt == prompt:
+                reward = -0.1
+                total_reward += reward
+                rewards.append(reward)
+                steps = step_num
+                done = step_num >= max_steps
+                emit_step(step_num, action_id, reward, done, None)
+                if done:
+                    break
+                continue
+
+            new_tokens = count_tokens(new_prompt)
+            if new_tokens > task["token_budget"]:
+                reward = -0.5
+                total_reward += reward
+                rewards.append(reward)
+                steps = step_num
+                emit_step(step_num, action_id, reward, True, "budget_exceeded")
+                break
+
+            new_output = call_llm(new_prompt, task["reference"])
+            new_score = rouge_l(new_output, task["reference"])
+            token_overhead = new_tokens - current_tokens
+            reward = round(new_score - current_score - ALPHA * token_overhead, 4)
+
+            done = False
+            reason = "continue"
+            if new_score > 0.85:
+                reward = round(reward + 1.0, 4)
+                done = True
+                reason = "success"
+            elif step_num >= max_steps:
+                done = True
+                reason = "max_steps"
+
+            prompt = new_prompt
+            current_score = new_score
+            current_tokens = new_tokens
+            total_reward += reward
+            rewards.append(reward)
+            steps = step_num
+
+            emit_step(step_num, action_id, reward, done, None if reason == "continue" else reason)
+
+            if done:
+                break
+    finally:
+        result["final_score"] = current_score
+        result["final_token_count"] = current_tokens
+        result["efficiency"] = round(current_score / max(1, current_tokens), 6)
+        result["total_reward"] = round(total_reward, 4)
+        result["rewards"] = rewards
+        result["success"] = bool(current_score >= 0.1)
+        result["steps"] = steps
+        emit_end(result)
+
     return result
 
 
 def print_summary(results: list[dict]) -> None:
-    print("\nBASELINE SCORES SUMMARY")
-    print("=" * 86)
-    print(f"{'Difficulty':<12} {'Score':>8} {'Tokens':>8} {'Budget':>8} {'Efficiency':>12} {'Reward':>10} {'Steps':>8}")
-    print("-" * 86)
-    for row in results:
-        print(
-            f"{row['difficulty']:<12} {row['final_score']:>8.4f} {row['final_token_count']:>8} "
-            f"{row['token_budget']:>8} {row['efficiency']:>12.6f} {row['total_reward']:>10.4f} {row['steps']:>8}"
-        )
-    print("-" * 86)
-
-    avg_score = sum(r["final_score"] for r in results) / len(results)
-    avg_eff = sum(r["efficiency"] for r in results) / len(results)
-    avg_reward = sum(r["total_reward"] for r in results) / len(results)
-    print(f"{'Average':<12} {avg_score:>8.4f} {'-':>8} {'-':>8} {avg_eff:>12.6f} {avg_reward:>10.4f} {'-':>8}")
-    print("Efficiency = final_score / final_token_count")
-    print("All scores are ROUGE-L F1 in (0.0, 1.0).")
+    # Keep stdout strict: only [START], [STEP], [END] lines.
+    _ = results
 
 
 def main() -> None:
-    print("=" * 70)
-    print("PromptOptEnv Cost-Aware Baseline Inference")
-    print(f"Model: {MODEL_NAME}")
-    print(f"Endpoint: {API_BASE_URL}")
-    print(f"Alpha: {ALPHA}")
-    print(f"Max steps: {MAX_STEPS}")
-    print(f"Intelligent actions: {USE_INTELLIGENT_ACTIONS and _INTELLIGENT_ACTIONS_AVAILABLE}")
-    print("=" * 70)
-
     results = []
     for task in EVAL_TASKS:
         results.append(run_episode(task, max_steps=MAX_STEPS))
@@ -371,8 +358,6 @@ if __name__ == "__main__":
     try:
         main()
     except Exception as fatal_error:
-        print(f"[ERROR] inference.py encountered an exception: {fatal_error}")
-        traceback.print_exc()
+        _ = fatal_error
     finally:
-        print("Script complete.")
         sys.exit(0)

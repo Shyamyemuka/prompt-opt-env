@@ -11,7 +11,6 @@ import os
 import threading
 from dataclasses import dataclass
 
-import httpx
 from openai import OpenAI
 
 
@@ -128,7 +127,7 @@ class LLMRouter:
                 base_url=provider.base_url,
                 api_key=provider.api_key,
                 max_retries=self._max_retries,
-                http_client=httpx.Client(trust_env=False, timeout=self._timeout_seconds + 5),
+                timeout=self._timeout_seconds + 5,
             )
             self._clients[provider.name] = client
         return client
@@ -212,4 +211,3 @@ def create_default_router(
 ) -> LLMRouter:
     providers = build_provider_specs(default_model=default_model, default_base_url=default_base_url)
     return LLMRouter(providers=providers, timeout_seconds=timeout_seconds, max_retries=max_retries)
-
