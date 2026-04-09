@@ -1,3 +1,12 @@
+---
+title: Prompt Opt Env
+emoji: "🚀"
+colorFrom: blue
+colorTo: indigo
+sdk: docker
+pinned: false
+---
+
 # PromptOptEnv
 
 PromptOptEnv is a cost-aware prompt optimization environment that improves LLM prompts using reinforcement learning (RL) style actions while strictly tracking token spend. It addresses a critical real-world problem in prompt engineering: maximizing response quality often leads to bloated, expensive prompts. By framing prompt optimization as a constrained RL problem, PromptOptEnv trains agents to improve, compress, or explicitly stop editing a prompt to maximize quality _per token_.
