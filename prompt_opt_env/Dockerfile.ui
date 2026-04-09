@@ -1,6 +1,6 @@
-# PromptOptEnv - Custom Dark UI Dockerfile for Hugging Face Spaces
-# Runs the custom FastAPI web interface (landing page + prompt optimizer)
-# while keeping the OpenEnv RL environment accessible as background APIs.
+# PromptOptEnv Dockerfile for Hugging Face Spaces
+# Runs the OpenEnv FastAPI app (server.app:app), which also mounts the custom UI
+# routes from web_ui. This keeps /reset, /step, /state, /health compatible.
 
 ARG BASE_IMAGE=ghcr.io/meta-pytorch/openenv-base:latest
 FROM ${BASE_IMAGE} AS builder
@@ -52,9 +52,9 @@ ENV PATH="/app/.venv/bin:$PATH"
 ENV PYTHONPATH="/app/env:$PYTHONPATH"
 ENV PORT=7860
 
-# Health check on our UI server
+# Health check on OpenEnv server endpoint
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
-    CMD curl -f http://localhost:7860/ || exit 1
+    CMD curl -f http://localhost:7860/health || exit 1
 
-# Launch our custom dark UI web_app (web_ui.py inside the package)
-CMD ["sh", "-c", "cd /app/env && python -c \"import sys; sys.path.insert(0, '.'); from web_ui import app, _write_templates; _write_templates(); import uvicorn; uvicorn.run(app, host='0.0.0.0', port=7860)\""]
+# Launch OpenEnv server app; UI is mounted by server/app.py
+CMD ["sh", "-c", "cd /app/env && python -c \"import sys; sys.path.insert(0, '.'); from server.app import app; import uvicorn; uvicorn.run(app, host='0.0.0.0', port=7860)\""]

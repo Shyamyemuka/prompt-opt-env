@@ -19,6 +19,21 @@ app = create_fastapi_app(
     max_concurrent_envs=1,
 )
 
+# Ensure checklist-compatible health response payload.
+try:
+    app.router.routes = [
+        route
+        for route in app.router.routes
+        if getattr(route, "path", None) != "/health"
+    ]
+except Exception:
+    pass
+
+
+@app.get("/health")
+def health_check() -> dict[str, str]:
+    return {"status": "ok"}
+
 # Mount custom dark UI routes (both root and /web for HF compatibility).
 try:
     try:
