@@ -29,6 +29,26 @@ env_vars:
     required: false
     secret: true
     description: API key for OpenAI-compatible providers (preferred)
+  - name: OPENAI_BASE_URL
+    required: false
+    default: "https://api.openai.com/v1/"
+    description: OpenAI provider base URL (OpenAI-compatible)
+  - name: OPENAI_MODEL
+    required: false
+    default: "gpt-4o-mini"
+    description: Model used when OpenAI provider is selected
+  - name: GEMINI_API_KEY
+    required: false
+    secret: true
+    description: Gemini API key (used via OpenAI-compatible endpoint)
+  - name: GEMINI_BASE_URL
+    required: false
+    default: "https://generativelanguage.googleapis.com/v1beta/openai/"
+    description: Gemini OpenAI-compatible base URL
+  - name: GEMINI_MODEL
+    required: false
+    default: "gemini-2.5-flash"
+    description: Model used when Gemini provider is selected
   - name: HF_TOKEN
     required: false
     secret: true

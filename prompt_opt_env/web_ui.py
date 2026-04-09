@@ -44,6 +44,10 @@ except (ImportError, ModuleNotFoundError):
 from openai import OpenAI
 import httpx
 from rouge_score import rouge_scorer
+try:
+    from .llm_router import create_default_router
+except Exception:
+    from llm_router import create_default_router
 
 # ── Environment variables (loaded from .env.local above) ─────────────────────
 def _first_env(*keys: str, default: str = "") -> str:
@@ -106,8 +110,8 @@ MAX_RESCUE_TRIALS: int = int(os.getenv("MAX_RESCUE_TRIALS", "10"))
 OUTPUT_TOKEN_COST: float = float(os.getenv("OUTPUT_TOKEN_COST", "1.0"))
 USE_INTELLIGENT_ACTIONS: bool = _env_bool("USE_INTELLIGENT_ACTIONS", True)
 
-if not HF_TOKEN:
-    print("[WARNING] HF_TOKEN not set. Add it to .env.local as HF_TOKEN=hf_...")
+if not (os.getenv("OPENAI_API_KEY") or os.getenv("GEMINI_API_KEY") or HF_TOKEN):
+    print("[WARNING] No LLM provider key found. Set OPENAI_API_KEY and/or GEMINI_API_KEY (or HF_TOKEN).")
 if any(
     os.getenv(name)
     for name in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy")
@@ -122,6 +126,12 @@ _ACTIVE_API_BASE_URL: str = _API_BASE_URL_CANDIDATES[0] if _API_BASE_URL_CANDIDA
 _LAST_LLM_ERROR = ""
 _LAST_LLM_FINISH_REASON = ""
 _ROUGE = rouge_scorer.RougeScorer(["rougeL"], use_stemmer=True)
+_LLM_ROUTER = create_default_router(
+    default_model=MODEL_NAME,
+    default_base_url=API_BASE_URL,
+    timeout_seconds=LLM_TIMEOUT_SECONDS,
+    max_retries=LLM_MAX_RETRIES,
+)
 
 
 def get_client(base_url: str | None = None):
@@ -161,49 +171,33 @@ def _ordered_api_base_urls() -> list[str]:
 
 def call_llm(prompt: str, max_tokens: int = 300) -> str:
     """Call LLM with the prompt and return output."""
-    global _LAST_LLM_ERROR, _LAST_LLM_FINISH_REASON, _ACTIVE_API_BASE_URL
-    if not HF_TOKEN:
+    global _LAST_LLM_ERROR, _LAST_LLM_FINISH_REASON
+    if not _LLM_ROUTER.has_provider():
         _LAST_LLM_ERROR = "missing_api_key"
         _LAST_LLM_FINISH_REASON = ""
         return ""
-
-    errors: list[str] = []
-    for base_url in _ordered_api_base_urls():
-        client = get_client(base_url)
-        if not client:
-            continue
-        try:
-            r = client.chat.completions.create(
-                model=MODEL_NAME,
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=max_tokens,
-                temperature=0.3,
-                timeout=LLM_TIMEOUT_SECONDS,
-            )
-            _ACTIVE_API_BASE_URL = base_url
-            _LAST_LLM_ERROR = ""
-            _LAST_LLM_FINISH_REASON = (r.choices[0].finish_reason or "").strip()
-            return r.choices[0].message.content or ""
-        except Exception as exc:
-            error_text = f"{base_url} -> {type(exc).__name__}: {exc}"
-            errors.append(error_text)
-            if not _is_retryable_connection_error(exc):
-                _LAST_LLM_ERROR = error_text[:500]
-                _LAST_LLM_FINISH_REASON = ""
-                return ""
-
-    _LAST_LLM_ERROR = (" | ".join(errors) if errors else "unknown_connection_error")[:500]
-    _LAST_LLM_FINISH_REASON = ""
-    return ""
+    text = _LLM_ROUTER.complete(
+        messages=[{"role": "user", "content": prompt}],
+        max_tokens=max_tokens,
+        temperature=0.3,
+    )
+    _LAST_LLM_ERROR = _LLM_ROUTER.last_error
+    _LAST_LLM_FINISH_REASON = _LLM_ROUTER.last_finish_reason
+    return text
 
 
 def get_llm_runtime_status() -> dict[str, Any]:
     """Expose sanitized runtime status for debugging connection/key issues."""
+    router_status = _LLM_ROUTER.status()
+    providers = router_status.get("providers", [])
+    first_base = providers[0]["base_url"] if providers else API_BASE_URL
     return {
-        "api_base_url": _ACTIVE_API_BASE_URL or API_BASE_URL,
+        "api_base_url": first_base,
         "api_base_candidates": _API_BASE_URL_CANDIDATES,
         "model_name": MODEL_NAME,
-        "token_present": bool(HF_TOKEN),
+        "token_present": bool(router_status.get("has_provider")),
+        "providers": providers,
+        "active_provider": router_status.get("active_provider"),
         "llm_timeout_seconds": LLM_TIMEOUT_SECONDS,
         "llm_max_retries": LLM_MAX_RETRIES,
         "optimizer_fast_mode": OPTIMIZER_FAST_MODE,
@@ -215,8 +209,8 @@ def get_llm_runtime_status() -> dict[str, Any]:
                 "http_proxy", "https_proxy", "all_proxy",
             )
         ),
-        "last_llm_error": _LAST_LLM_ERROR,
-        "last_finish_reason": _LAST_LLM_FINISH_REASON,
+        "last_llm_error": router_status.get("last_error") or _LAST_LLM_ERROR,
+        "last_finish_reason": router_status.get("last_finish_reason") or _LAST_LLM_FINISH_REASON,
     }
 
 
@@ -692,7 +686,7 @@ def optimize_prompt_with_state(state: dict) -> dict:
     prompt = (state.get("prompt", "") or "").strip()
     input_data = (state.get("input", "") or "").strip()
     goal = state.get("goal", "Balanced")
-    use_intelligent_actions = USE_INTELLIGENT_ACTIONS and bool(HF_TOKEN)
+    use_intelligent_actions = USE_INTELLIGENT_ACTIONS and _LLM_ROUTER.has_provider()
 
     effective_max_steps = MAX_STEPS
     if OPTIMIZER_FAST_MODE:

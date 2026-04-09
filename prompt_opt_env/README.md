@@ -196,6 +196,11 @@ Each task has a hard token ceiling. If any action would cause the prompt to exce
 | `API_BASE_URL` | **Yes** | — | OpenAI-compatible endpoint. HF: `https://router.huggingface.co/v1/` |
 | `MODEL_NAME` | **Yes** | — | E.g. `Qwen/Qwen2.5-72B-Instruct` |
 | `OPENAI_API_KEY` | No | — | Preferred API key for OpenAI-compatible endpoints |
+| `OPENAI_BASE_URL` | No | `https://api.openai.com/v1/` | OpenAI provider endpoint for multi-provider routing |
+| `OPENAI_MODEL` | No | `gpt-4o-mini` | Model to use when OpenAI provider is selected |
+| `GEMINI_API_KEY` | No | — | Gemini API key (used via OpenAI-compatible endpoint) |
+| `GEMINI_BASE_URL` | No | `https://generativelanguage.googleapis.com/v1beta/openai/` | Gemini provider endpoint |
+| `GEMINI_MODEL` | No | `gemini-2.5-flash` | Model to use when Gemini provider is selected |
 | `HF_TOKEN` | No | — | HuggingFace token fallback if `OPENAI_API_KEY` is unset |
 | `MAX_STEPS` | No | `7` | Max steps per episode |
 | `DONE_THRESHOLD` | No | `0.85` | ROUGE-L for success bonus |

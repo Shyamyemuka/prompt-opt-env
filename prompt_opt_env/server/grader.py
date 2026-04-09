@@ -9,8 +9,12 @@ Modes:
 """
 import os
 import sys
-from openai import OpenAI
 from rouge_score import rouge_scorer
+
+try:
+    from ..llm_router import create_default_router
+except (ModuleNotFoundError, ImportError):
+    from llm_router import create_default_router
 
 
 _ROUGE = rouge_scorer.RougeScorer(["rougeL"], use_stemmer=True)
@@ -85,16 +89,6 @@ DUMMY_OUTPUTS: dict[int, str] = {
     ),
 }
 
-
-def _make_client() -> OpenAI:
-    """Create OpenAI client from environment variables."""
-    api_key = os.getenv("OPENAI_API_KEY") or os.getenv("HF_TOKEN", "")
-    return OpenAI(
-        base_url=os.getenv("API_BASE_URL", "https://router.huggingface.co/v1/"),
-        api_key=api_key,
-    )
-
-
 class Grader:
     """
     Reward computation for PromptOptEnv.
@@ -107,6 +101,12 @@ class Grader:
     def __init__(self, grader_type: str = "rouge", **kwargs) -> None:
         self.grader_type = grader_type
         self.model_name = os.getenv("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
+        self._router = create_default_router(
+            default_model=self.model_name,
+            default_base_url=os.getenv("API_BASE_URL", "https://router.huggingface.co/v1/"),
+            timeout_seconds=float(os.getenv("LLM_TIMEOUT_SECONDS", "30")),
+            max_retries=int(os.getenv("LLM_MAX_RETRIES", "2")),
+        )
 
     def score(self, prompt: str, reference_answer: str, task_id: int) -> tuple[float, str]:
         """
@@ -131,18 +131,17 @@ class Grader:
 
     def _call_llm(self, prompt: str) -> str:
         """
-        Call LLM using the OpenAI Python client.
+        Call LLM using the provider router (OpenAI-compatible clients).
         MANDATORY approach — no raw HTTP to LLM endpoints.
         """
-        client = _make_client()
-        response = client.chat.completions.create(
-            model=self.model_name,
+        text = self._router.complete(
             messages=[{"role": "user", "content": prompt}],
             max_tokens=200,
             temperature=0.1,
-            timeout=30,
         )
-        return response.choices[0].message.content or ""
+        if not text:
+            raise RuntimeError(self._router.last_error or "llm_call_failed")
+        return text
 
     def _compute_rouge(self, hypothesis: str, reference: str) -> float:
         """ROUGE-L F1 between hypothesis and reference. Returns float in (0.0, 1.0)."""

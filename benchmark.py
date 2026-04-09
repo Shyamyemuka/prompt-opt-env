@@ -28,7 +28,7 @@ if os.path.exists(".env.local"):
 
 from agent import HeuristicAgent, RandomAgent, ImmediateStopAgent, AlwaysImproveAgent
 from rouge_score import rouge_scorer
-from openai import OpenAI
+from prompt_opt_env.llm_router import create_default_router
 
 # Configuration
 API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1/")
@@ -50,11 +50,12 @@ except Exception:
     except Exception:
         _INTELLIGENT_ACTIONS_AVAILABLE = False
 
-try:
-    _CLIENT = OpenAI(base_url=API_BASE_URL, api_key=API_KEY) if API_KEY else None
-except Exception as e:
-    print(f"[WARN] Could not initialize OpenAI client: {e}")
-    _CLIENT = None
+_LLM_ROUTER = create_default_router(
+    default_model=MODEL_NAME,
+    default_base_url=API_BASE_URL,
+    timeout_seconds=float(os.getenv("LLM_TIMEOUT_SECONDS", "30")),
+    max_retries=int(os.getenv("LLM_MAX_RETRIES", "2")),
+)
 
 _ROUGE = rouge_scorer.RougeScorer(["rougeL"], use_stemmer=True)
 SCORE_EPSILON = 1e-4
@@ -163,21 +164,19 @@ def apply_action_intelligent_for_task(action_id: int, prompt: str, task: dict) -
 
 
 def call_llm(prompt: str, fallback: str) -> str:
-    if _CLIENT is None:
+    if not _LLM_ROUTER.has_provider():
         return fallback
-    try:
-        response = _CLIENT.chat.completions.create(
-            model=MODEL_NAME,
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=200,
-            temperature=0.1,
-            timeout=30,
-        )
-        text = response.choices[0].message.content or ""
-        return text if text.strip() else fallback
-    except Exception as e:
-        print(f"[WARN] LLM call failed: {e}")
+    text = _LLM_ROUTER.complete(
+        messages=[{"role": "user", "content": prompt}],
+        max_tokens=200,
+        temperature=0.1,
+    )
+    if text.strip():
+        return text
+    if _LLM_ROUTER.last_error:
+        print(f"[WARN] LLM call failed: {_LLM_ROUTER.last_error}")
         return fallback
+    return fallback
 
 
 def rouge_l(hypothesis: str, reference: str) -> float:
@@ -384,7 +383,7 @@ def main():
     print(f"Max steps: {MAX_STEPS}, Token alpha: {TOKEN_PENALTY_ALPHA}")
     print("=" * 70)
 
-    if _CLIENT is None:
+    if not _LLM_ROUTER.has_provider():
         print("\n[WARN] No API key found. Using fallback LLM outputs.")
         print("Results will be deterministic but may not reflect real performance.\n")
 

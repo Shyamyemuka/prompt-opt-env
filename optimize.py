@@ -16,8 +16,8 @@ import sys
 import asyncio
 from typing import Optional
 
-from openai import OpenAI
 from rouge_score import rouge_scorer
+from prompt_opt_env.llm_router import create_default_router
 
 # Import the actual PromptOptEnv environment
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -33,27 +33,34 @@ MODEL_NAME: str = os.getenv("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
 HF_TOKEN: str = os.getenv("HF_TOKEN", "")
 ALPHA: float = float(os.getenv("TOKEN_PENALTY_ALPHA", "0.02"))
 
-if not HF_TOKEN:
-    print("[X] Error: HF_TOKEN not set. Please set your HuggingFace token.")
-    print("   export HF_TOKEN=hf_your_token_here")
+_LLM_ROUTER = create_default_router(
+    default_model=MODEL_NAME,
+    default_base_url=API_BASE_URL,
+    timeout_seconds=float(os.getenv("LLM_TIMEOUT_SECONDS", "30")),
+    max_retries=int(os.getenv("LLM_MAX_RETRIES", "2")),
+)
+
+if not _LLM_ROUTER.has_provider():
+    print("[X] Error: no provider key found.")
+    print("   set OPENAI_API_KEY and/or GEMINI_API_KEY (or HF_TOKEN)")
     sys.exit(1)
 
-_CLIENT = OpenAI(base_url=API_BASE_URL, api_key=HF_TOKEN)
 _ROUGE = rouge_scorer.RougeScorer(["rougeL"], use_stemmer=True)
 
 
 def call_llm(prompt: str, max_tokens: int = 300) -> str:
     """Call LLM with the prompt and return output."""
-    try:
-        r = _CLIENT.chat.completions.create(
-            model=MODEL_NAME,
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=max_tokens, temperature=0.3, timeout=30,
-        )
-        return r.choices[0].message.content or ""
-    except Exception as e:
-        print(f"   [!] LLM call failed: {e}")
+    text = _LLM_ROUTER.complete(
+        messages=[{"role": "user", "content": prompt}],
+        max_tokens=max_tokens,
+        temperature=0.3,
+    )
+    if text:
+        return text
+    if _LLM_ROUTER.last_error:
+        print(f"   [!] LLM call failed: {_LLM_ROUTER.last_error}")
         return ""
+    return ""
 
 
 def score_output(output: str, reference: str) -> float:

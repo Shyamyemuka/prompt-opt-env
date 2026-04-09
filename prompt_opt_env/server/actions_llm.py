@@ -11,14 +11,14 @@ import os
 from dataclasses import dataclass
 from typing import Any, Optional
 
-from openai import OpenAI
-
 try:
     from .task_bank import Task
     from .actions import add_context, shorten, add_example, rephrase, add_constraint
+    from ..llm_router import create_default_router
 except (ModuleNotFoundError, ImportError):
     from task_bank import Task
     from actions import add_context, shorten, add_example, rephrase, add_constraint
+    from llm_router import create_default_router
 
 
 _ACTION_LLM_TIMEOUT_SECONDS = float(os.getenv("ACTION_LLM_TIMEOUT_SECONDS", "30"))
@@ -26,6 +26,7 @@ _ACTION_LLM_TEMPERATURE = float(os.getenv("ACTION_LLM_TEMPERATURE", "0.2"))
 _ACTION_LLM_MAX_CALLS = int(os.getenv("ACTION_LLM_MAX_CALLS", "250"))
 _ACTION_LLM_DRY_RUN = os.getenv("ACTION_LLM_DRY_RUN", "false").lower() == "true"
 _MODEL_NAME = os.getenv("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
+_ACTION_LLM_MAX_RETRIES = int(os.getenv("ACTION_LLM_MAX_RETRIES", os.getenv("LLM_MAX_RETRIES", "2")))
 
 
 @dataclass
@@ -41,27 +42,15 @@ class ActionResult:
     used_fallback: bool = False
 
 
-_CLIENT: Optional[OpenAI] = None
 _ACTION_CALLS = 0
 _ACTION_CACHE: dict[tuple[str, str, int, str], str] = {}
 _CACHE_HITS = 0
-
-
-def _make_client() -> Optional[OpenAI]:
-    api_key = os.getenv("OPENAI_API_KEY") or os.getenv("HF_TOKEN", "")
-    if not api_key:
-        return None
-    return OpenAI(
-        base_url=os.getenv("API_BASE_URL", "https://router.huggingface.co/v1/"),
-        api_key=api_key,
-    )
-
-
-def _get_client() -> Optional[OpenAI]:
-    global _CLIENT
-    if _CLIENT is None:
-        _CLIENT = _make_client()
-    return _CLIENT
+_ROUTER = create_default_router(
+    default_model=_MODEL_NAME,
+    default_base_url=os.getenv("API_BASE_URL", "https://router.huggingface.co/v1/"),
+    timeout_seconds=_ACTION_LLM_TIMEOUT_SECONDS,
+    max_retries=_ACTION_LLM_MAX_RETRIES,
+)
 
 
 def count_tokens(text: str) -> int:
@@ -99,8 +88,7 @@ def _call_llm_rewrite(prompt: str, instruction: str, max_tokens: int = 220) -> t
     """Return (prompt, success, explanation, api_error)."""
     global _ACTION_CALLS, _CACHE_HITS
 
-    client = _get_client()
-    if client is None:
+    if not _ROUTER.has_provider():
         return prompt, False, "missing_api_key", "missing_api_key"
 
     cache_key = (instruction, prompt, max_tokens, _MODEL_NAME)
@@ -124,8 +112,7 @@ def _call_llm_rewrite(prompt: str, instruction: str, max_tokens: int = 220) -> t
 
     try:
         _ACTION_CALLS += 1
-        response = client.chat.completions.create(
-            model=_MODEL_NAME,
+        rewritten_text = _ROUTER.complete(
             messages=[
                 {
                     "role": "system",
@@ -135,9 +122,8 @@ def _call_llm_rewrite(prompt: str, instruction: str, max_tokens: int = 220) -> t
             ],
             max_tokens=max_tokens,
             temperature=_ACTION_LLM_TEMPERATURE,
-            timeout=_ACTION_LLM_TIMEOUT_SECONDS,
         )
-        rewritten = _sanitize_model_rewrite(response.choices[0].message.content or "")
+        rewritten = _sanitize_model_rewrite(rewritten_text)
         if not rewritten:
             return prompt, False, "empty_rewrite", "empty_rewrite"
 

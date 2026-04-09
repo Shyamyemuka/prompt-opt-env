@@ -17,8 +17,8 @@ import sys
 import traceback
 from types import SimpleNamespace
 
-from openai import OpenAI
 from rouge_score import rouge_scorer
+from prompt_opt_env.llm_router import create_default_router
 
 
 def _load_env_local() -> None:
@@ -64,14 +64,14 @@ except Exception:
 
 random.seed(INFERENCE_SEED)
 
-_CLIENT = None
-if API_KEY:
-    try:
-        _CLIENT = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
-    except Exception as client_error:
-        print(f"[WARN] OpenAI client init failed, using fallback outputs: {client_error}")
-else:
-    print("[WARN] OPENAI_API_KEY/HF_TOKEN missing. Running inference baseline with deterministic fallback outputs.")
+_LLM_ROUTER = create_default_router(
+    default_model=MODEL_NAME,
+    default_base_url=API_BASE_URL,
+    timeout_seconds=float(os.getenv("LLM_TIMEOUT_SECONDS", "30")),
+    max_retries=int(os.getenv("LLM_MAX_RETRIES", "2")),
+)
+if not _LLM_ROUTER.has_provider():
+    print("[WARN] No provider key found (OPENAI_API_KEY/GEMINI_API_KEY/HF_TOKEN). Running with deterministic fallback outputs.")
 
 _ROUGE = rouge_scorer.RougeScorer(["rougeL"], use_stemmer=True)
 
@@ -185,21 +185,19 @@ def apply_intelligent(action_id: int, prompt: str, task: dict) -> str:
 
 
 def call_llm(prompt: str, fallback: str) -> str:
-    if _CLIENT is None:
+    if not _LLM_ROUTER.has_provider():
         return fallback
-    try:
-        response = _CLIENT.chat.completions.create(
-            model=MODEL_NAME,
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=200,
-            temperature=0.1,
-            timeout=30,
-        )
-        text = response.choices[0].message.content or ""
-        return text if text.strip() else fallback
-    except Exception as llm_error:
-        print(f"[WARN] LLM call failed, using fallback output: {llm_error}")
+    text = _LLM_ROUTER.complete(
+        messages=[{"role": "user", "content": prompt}],
+        max_tokens=200,
+        temperature=0.1,
+    )
+    if text.strip():
+        return text
+    if _LLM_ROUTER.last_error:
+        print(f"[WARN] LLM call failed, using fallback output: {_LLM_ROUTER.last_error}")
         return fallback
+    return fallback
 
 
 def rouge_l(hypothesis: str, reference: str) -> float:
