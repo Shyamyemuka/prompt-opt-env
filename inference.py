@@ -4,7 +4,7 @@ Cost-aware baseline inference script.
 Mandatory expectations:
 - file name: inference.py at repo root
 - uses OpenAI Python client for LLM calls
-- reads API_BASE_URL, MODEL_NAME, HF_TOKEN from environment
+- reads API_BASE_URL, MODEL_NAME, OPENAI_API_KEY (or HF_TOKEN fallback) from environment
 - runs 3 tasks (easy, medium, hard)
 - emits structured logs with [START], [STEP], [END]
 - prints summary table and exits with status code 0
@@ -15,6 +15,7 @@ import random
 import re
 import sys
 import traceback
+from types import SimpleNamespace
 
 from openai import OpenAI
 from rouge_score import rouge_scorer
@@ -42,21 +43,35 @@ _load_env_local()
 
 API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1/")
 MODEL_NAME = os.getenv("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 HF_TOKEN = os.getenv("HF_TOKEN", "")
+API_KEY = OPENAI_API_KEY or HF_TOKEN
 ALPHA = float(os.getenv("TOKEN_PENALTY_ALPHA", "0.02"))
 MAX_STEPS = int(os.getenv("MAX_STEPS", "7"))
 INFERENCE_SEED = int(os.getenv("INFERENCE_SEED", "42"))
+SCORE_EPSILON = 1e-4
+USE_INTELLIGENT_ACTIONS = os.getenv("USE_INTELLIGENT_ACTIONS", "true").lower() == "true"
+
+try:
+    from prompt_opt_env.server.actions_llm import apply_action_intelligent
+    _INTELLIGENT_ACTIONS_AVAILABLE = True
+except Exception:
+    try:
+        from server.actions_llm import apply_action_intelligent
+        _INTELLIGENT_ACTIONS_AVAILABLE = True
+    except Exception:
+        _INTELLIGENT_ACTIONS_AVAILABLE = False
 
 random.seed(INFERENCE_SEED)
 
 _CLIENT = None
-if HF_TOKEN:
+if API_KEY:
     try:
-        _CLIENT = OpenAI(base_url=API_BASE_URL, api_key=HF_TOKEN)
+        _CLIENT = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
     except Exception as client_error:
         print(f"[WARN] OpenAI client init failed, using fallback outputs: {client_error}")
 else:
-    print("[WARN] HF_TOKEN missing. Running inference baseline with deterministic fallback outputs.")
+    print("[WARN] OPENAI_API_KEY/HF_TOKEN missing. Running inference baseline with deterministic fallback outputs.")
 
 _ROUGE = rouge_scorer.RougeScorer(["rougeL"], use_stemmer=True)
 
@@ -154,6 +169,21 @@ def apply(action_id: int, prompt: str, task: dict) -> str:
     return prompt
 
 
+def apply_intelligent(action_id: int, prompt: str, task: dict) -> str:
+    if not _INTELLIGENT_ACTIONS_AVAILABLE or action_id == 5:
+        return apply(action_id, prompt, task)
+
+    task_obj = SimpleNamespace(
+        task_id=task["task_id"],
+        task_description=task["task_description"],
+        context_sentence=task["context"],
+        example_output=task["example"],
+        constraint_sentence=task["constraint"],
+    )
+    result = apply_action_intelligent(action_id, prompt, task_obj)
+    return result.new_prompt
+
+
 def call_llm(prompt: str, fallback: str) -> str:
     if _CLIENT is None:
         return fallback
@@ -173,9 +203,11 @@ def call_llm(prompt: str, fallback: str) -> str:
 
 
 def rouge_l(hypothesis: str, reference: str) -> float:
-    if not hypothesis:
-        return 0.0
-    return round(_ROUGE.score(reference, hypothesis)["rougeL"].fmeasure, 4)
+    if not hypothesis or not reference:
+        return SCORE_EPSILON
+    raw = float(_ROUGE.score(reference, hypothesis)["rougeL"].fmeasure)
+    bounded = max(SCORE_EPSILON, min(1.0 - SCORE_EPSILON, raw))
+    return round(bounded, 4)
 
 
 def emit_start(task: dict) -> None:
@@ -235,7 +267,10 @@ def run_episode(task: dict, max_steps: int = 7) -> dict:
             emit_step(task["task_id"], step_num, action_id, current_score, current_tokens, reward, True, "voluntary_stop")
             break
 
-        new_prompt = apply(action_id, prompt, task)
+        if USE_INTELLIGENT_ACTIONS and _INTELLIGENT_ACTIONS_AVAILABLE:
+            new_prompt = apply_intelligent(action_id, prompt, task)
+        else:
+            new_prompt = apply(action_id, prompt, task)
         if new_prompt == prompt:
             reward = -0.1
             total_reward += reward
@@ -314,7 +349,7 @@ def print_summary(results: list[dict]) -> None:
     avg_reward = sum(r["total_reward"] for r in results) / len(results)
     print(f"{'Average':<12} {avg_score:>8.4f} {'-':>8} {'-':>8} {avg_eff:>12.6f} {avg_reward:>10.4f} {'-':>8}")
     print("Efficiency = final_score / final_token_count")
-    print("All scores are ROUGE-L F1 in [0.0, 1.0].")
+    print("All scores are ROUGE-L F1 in (0.0, 1.0).")
 
 
 def main() -> None:
@@ -324,6 +359,7 @@ def main() -> None:
     print(f"Endpoint: {API_BASE_URL}")
     print(f"Alpha: {ALPHA}")
     print(f"Max steps: {MAX_STEPS}")
+    print(f"Intelligent actions: {USE_INTELLIGENT_ACTIONS and _INTELLIGENT_ACTIONS_AVAILABLE}")
     print("=" * 70)
 
     results = []

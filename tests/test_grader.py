@@ -3,14 +3,14 @@
 import pytest
 from unittest.mock import patch, MagicMock
 
-from prompt_opt_env.server.grader import Grader, DUMMY_OUTPUTS
+from prompt_opt_env.server.grader import Grader, DUMMY_OUTPUTS, SCORE_EPSILON
 
 
 def test_rouge_score_returns_float():
     grader = Grader(grader_type="rouge")
     score, output = grader.score("Explain recursion.", "Recursion calls itself.", task_id=14)
     assert isinstance(score, float)
-    assert 0.0 <= score <= 1.0
+    assert 0.0 < score < 1.0
 
 
 def test_rouge_score_is_nonzero_for_related_content():
@@ -47,12 +47,12 @@ def test_openai_api_fallback_on_failure():
     with patch.object(grader, "_call_llm", side_effect=Exception("API down")):
         score, output = grader.score("test prompt", "reference answer", task_id=0)
     assert isinstance(score, float)
-    assert 0.0 <= score <= 1.0
+    assert 0.0 < score < 1.0
     assert output == DUMMY_OUTPUTS[0]  # fell back to dummy
 
 
 def test_compute_rouge_empty_inputs():
     grader = Grader()
-    assert grader._compute_rouge("", "reference") == 0.0
-    assert grader._compute_rouge("hypothesis", "") == 0.0
-    assert grader._compute_rouge("", "") == 0.0
+    assert grader._compute_rouge("", "reference") == SCORE_EPSILON
+    assert grader._compute_rouge("hypothesis", "") == SCORE_EPSILON
+    assert grader._compute_rouge("", "") == SCORE_EPSILON

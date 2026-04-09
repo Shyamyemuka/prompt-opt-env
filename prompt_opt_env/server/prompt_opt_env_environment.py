@@ -14,13 +14,25 @@ from openenv.core.env_server.types import State
 try:
     from ..models import PromptAction, PromptObservation
     from .actions import apply_action, count_tokens, ACTION_NAMES
-    from .grader import Grader
+    from .grader import Grader, SCORE_EPSILON
     from .task_bank import TASK_BANK, Task
+    try:
+        from .actions_llm import apply_action_intelligent, ACTION_NAMES_INTELLIGENT
+        _INTELLIGENT_ACTIONS_AVAILABLE = True
+    except Exception:
+        ACTION_NAMES_INTELLIGENT = {}
+        _INTELLIGENT_ACTIONS_AVAILABLE = False
 except (ModuleNotFoundError, ImportError):
     from models import PromptAction, PromptObservation
     from server.actions import apply_action, count_tokens, ACTION_NAMES
-    from server.grader import Grader
+    from server.grader import Grader, SCORE_EPSILON
     from server.task_bank import TASK_BANK, Task
+    try:
+        from server.actions_llm import apply_action_intelligent, ACTION_NAMES_INTELLIGENT
+        _INTELLIGENT_ACTIONS_AVAILABLE = True
+    except Exception:
+        ACTION_NAMES_INTELLIGENT = {}
+        _INTELLIGENT_ACTIONS_AVAILABLE = False
 
 
 # ── Configuration ─────────────────────────────────────────────────────────────
@@ -29,6 +41,7 @@ DONE_THRESHOLD: float     = float(os.getenv("DONE_THRESHOLD", "0.85"))
 TOKEN_PENALTY_ALPHA: float = float(os.getenv("TOKEN_PENALTY_ALPHA", "0.02"))
 GRADER_TYPE: str          = os.getenv("GRADER", "rouge")
 _TASK_SEED: str | None    = os.getenv("TASK_SEED", None)
+USE_INTELLIGENT_ACTIONS: bool = os.getenv("USE_INTELLIGENT_ACTIONS", "true").lower() == "true"
 
 
 class PromptOptEnvEnvironment(Environment):
@@ -50,13 +63,14 @@ class PromptOptEnvEnvironment(Environment):
         - No-op:             reward=-0.1, episode continues
 
     Configuration via environment variables:
-        GRADER              — 'rouge' or 'openai_client'. Default: 'rouge'.
-        MAX_STEPS           — Max steps per episode. Default: 7.
-        DONE_THRESHOLD      — ROUGE-L for success. Default: 0.85.
-        TOKEN_PENALTY_ALPHA — Cost penalty coefficient. Default: 0.02.
-        API_BASE_URL        — OpenAI-compatible endpoint.
-        MODEL_NAME          — Model identifier.
-        HF_TOKEN            — API key.
+        GRADER                   — 'rouge' or 'openai_client'. Default: 'rouge'.
+        MAX_STEPS                — Max steps per episode. Default: 7.
+        DONE_THRESHOLD           — ROUGE-L for success. Default: 0.85.
+        TOKEN_PENALTY_ALPHA      — Cost penalty coefficient. Default: 0.02.
+        USE_INTELLIGENT_ACTIONS  — Use LLM-powered prompt rewriting. Default: true.
+        API_BASE_URL             — OpenAI-compatible endpoint.
+        MODEL_NAME               — Model identifier.
+        OPENAI_API_KEY / HF_TOKEN — API key.
     """
 
     # Enable concurrent WebSocket sessions
@@ -64,13 +78,14 @@ class PromptOptEnvEnvironment(Environment):
 
     def __init__(self) -> None:
         self._grader = Grader(grader_type=GRADER_TYPE)
+        self._use_intelligent_actions = USE_INTELLIGENT_ACTIONS and _INTELLIGENT_ACTIONS_AVAILABLE
         self._episode_id: str = ""
         self._step_count: int = 0
         self._task: Task | None = None
         self._current_prompt: str = ""
         self._previous_prompt: str = ""
-        self._current_score: float = 0.0
-        self._previous_score: float = 0.0
+        self._current_score: float = SCORE_EPSILON
+        self._previous_score: float = SCORE_EPSILON
         self._current_token_count: int = 0
         self._previous_token_count: int = 0
         self._tokens_used_total: int = 0
@@ -100,14 +115,14 @@ class PromptOptEnvEnvironment(Environment):
             self._current_prompt, self._task.reference_answer, task_id
         )
         self._current_score = initial_score
-        self._previous_score = 0.0
+        self._previous_score = SCORE_EPSILON
 
         return PromptObservation(
             task_description=self._task.task_description,
             current_prompt=self._current_prompt,
             previous_prompt="",
             current_score=self._current_score,
-            previous_score=0.0,
+            previous_score=SCORE_EPSILON,
             current_token_count=self._current_token_count,
             previous_token_count=0,
             token_budget=self._task.token_budget,
@@ -120,6 +135,8 @@ class PromptOptEnvEnvironment(Environment):
             info={
                 "grader_used": GRADER_TYPE,
                 "action_applied": None,
+                "action_engine": "intelligent" if self._use_intelligent_actions else "deterministic",
+                "intelligent_actions_enabled": self._use_intelligent_actions,
                 "stuck_count": 0,
                 "termination_reason": None,
                 "llm_output_preview": "",
@@ -140,6 +157,9 @@ class PromptOptEnvEnvironment(Environment):
             self.reset()
 
         task_id = self._task.task_id
+        action_name = ACTION_NAMES.get(action.action_id, "UNKNOWN")
+        llm_action_explanation = ""
+        llm_action_fallback = False
 
         # ── STOP action ──────────────────────────────────────────────────────
         if action.action_id == 5:
@@ -196,7 +216,7 @@ class PromptOptEnvEnvironment(Environment):
                 reference_answer=self._task.reference_answer,
                 info={
                     "grader_used": GRADER_TYPE,
-                    "action_applied": ACTION_NAMES[action.action_id],
+                    "action_applied": action_name,
                     "stuck_count": self._stuck_count,
                     "termination_reason": "stuck",
                     "llm_output_preview": "",
@@ -205,7 +225,24 @@ class PromptOptEnvEnvironment(Environment):
             )
 
         # ── Apply action ──────────────────────────────────────────────────────
-        new_prompt = apply_action(action.action_id, self._current_prompt, self._task)
+        if self._use_intelligent_actions and action.action_id != 5:
+            # Use LLM-powered intelligent rewriting
+            try:
+                result = apply_action_intelligent(action.action_id, self._current_prompt, self._task)
+                new_prompt = result.new_prompt
+                action_name = ACTION_NAMES_INTELLIGENT.get(action.action_id, ACTION_NAMES.get(action.action_id, "UNKNOWN"))
+                llm_action_explanation = result.explanation
+                llm_action_fallback = result.used_fallback
+            except Exception:
+                # Fall back to simple actions on any error
+                new_prompt = apply_action(action.action_id, self._current_prompt, self._task)
+                action_name = ACTION_NAMES.get(action.action_id, "UNKNOWN")
+                llm_action_explanation = "intelligent_action_exception_fallback"
+                llm_action_fallback = True
+        else:
+            # Use simple string-based actions
+            new_prompt = apply_action(action.action_id, self._current_prompt, self._task)
+            action_name = ACTION_NAMES.get(action.action_id, "UNKNOWN")
 
         # ── No-op detection ───────────────────────────────────────────────────
         if new_prompt == self._current_prompt:
@@ -228,7 +265,10 @@ class PromptOptEnvEnvironment(Environment):
                 reference_answer=self._task.reference_answer,
                 info={
                     "grader_used": GRADER_TYPE,
-                    "action_applied": ACTION_NAMES[action.action_id],
+                    "action_applied": action_name,
+                    "action_engine": "intelligent" if self._use_intelligent_actions else "deterministic",
+                    "llm_action_explanation": llm_action_explanation,
+                    "llm_action_fallback": llm_action_fallback,
                     "stuck_count": self._stuck_count,
                     "termination_reason": "max_steps" if done else None,
                     "llm_output_preview": "",
@@ -257,7 +297,10 @@ class PromptOptEnvEnvironment(Environment):
                 reference_answer=self._task.reference_answer,
                 info={
                     "grader_used": GRADER_TYPE,
-                    "action_applied": ACTION_NAMES[action.action_id],
+                    "action_applied": action_name,
+                    "action_engine": "intelligent" if self._use_intelligent_actions else "deterministic",
+                    "llm_action_explanation": llm_action_explanation,
+                    "llm_action_fallback": llm_action_fallback,
                     "stuck_count": self._stuck_count,
                     "termination_reason": "budget_exceeded",
                     "llm_output_preview": "",
@@ -314,7 +357,10 @@ class PromptOptEnvEnvironment(Environment):
             reference_answer=self._task.reference_answer,
             info={
                 "grader_used": GRADER_TYPE,
-                "action_applied": ACTION_NAMES[action.action_id],
+                "action_applied": action_name,
+                "action_engine": "intelligent" if self._use_intelligent_actions else "deterministic",
+                "llm_action_explanation": llm_action_explanation,
+                "llm_action_fallback": llm_action_fallback,
                 "stuck_count": self._stuck_count,
                 "termination_reason": termination_reason,
                 "llm_output_preview": llm_output[:100] if llm_output else "",

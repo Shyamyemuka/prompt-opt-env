@@ -104,6 +104,7 @@ OPTIMIZER_FAST_MODE: bool = _env_bool("OPTIMIZER_FAST_MODE", False)
 MAX_LLM_CALLS_PER_RUN: int = int(os.getenv("MAX_LLM_CALLS_PER_RUN", "18"))
 MAX_RESCUE_TRIALS: int = int(os.getenv("MAX_RESCUE_TRIALS", "10"))
 OUTPUT_TOKEN_COST: float = float(os.getenv("OUTPUT_TOKEN_COST", "1.0"))
+USE_INTELLIGENT_ACTIONS: bool = _env_bool("USE_INTELLIGENT_ACTIONS", True)
 
 if not HF_TOKEN:
     print("[WARNING] HF_TOKEN not set. Add it to .env.local as HF_TOKEN=hf_...")
@@ -414,14 +415,55 @@ def fallback_output(task: str, prompt: str, input_data: str, is_reference: bool 
     return _first_n_words(text, summary_len)
 
 
-def apply_action_for_web(
+def _build_action_rewrite_instruction(
+    action_id: int,
+    task: str,
+    goal: str,
+    input_data: str,
+    context_text: str,
+    example: str,
+    constraint: str,
+) -> str:
+    """Create a task-aware rewrite instruction for one action."""
+    if action_id == 0:
+        return (
+            "Rewrite the prompt to naturally incorporate relevant context. "
+            "Do not append a raw 'Context:' line.\n"
+            f"Task: {task}\nGoal: {goal}\nContext to include: {context_text or input_data[:140].strip()}"
+        )
+    if action_id == 1:
+        return (
+            "Rewrite the prompt to be shorter and clearer while preserving intent and constraints. "
+            "Remove filler and redundancy."
+        )
+    if action_id == 2:
+        return (
+            "Rewrite the prompt to include a compact example of desired output format in a natural way. "
+            "Avoid boilerplate labels unless needed.\n"
+            f"Example to include: {example}"
+        )
+    if action_id == 3:
+        return (
+            "Rewrite the prompt for directness and clarity using imperative style. "
+            "Fix obvious spelling issues if present."
+        )
+    if action_id == 4:
+        return (
+            "Rewrite the prompt to integrate constraints naturally and explicitly. "
+            "Do not append a detached requirement line.\n"
+            f"Constraint to enforce: {constraint}"
+        )
+    return "Keep the prompt unchanged."
+
+
+def _apply_action_for_web_rule_based(
     action_id: int,
     task: str,
     current_prompt: str,
     input_data: str,
     goal: str,
 ) -> str:
-    """Apply a deterministic action transformation for the web optimizer."""
+    """Deterministic fallback action transformation for the web optimizer."""
     if action_id == 0:
         if task == "Summarization":
             context_text = "Focus only on key events, actions, and outcomes."
@@ -486,6 +528,97 @@ def apply_action_for_web(
             )
         return add_constraint(current_prompt, constraint)
     return current_prompt
+
+
+def apply_action_for_web(
+    action_id: int,
+    task: str,
+    current_prompt: str,
+    input_data: str,
+    goal: str,
+    use_intelligent_actions: bool = True,
+) -> str:
+    """Apply intelligent rewrite first, then deterministic fallback."""
+    fallback_prompt = _apply_action_for_web_rule_based(action_id, task, current_prompt, input_data, goal)
+    if not use_intelligent_actions or action_id not in (0, 1, 2, 3, 4):
+        return fallback_prompt
+
+    # Build task-specific values used by both fallback and rewrite prompts.
+    if task == "Summarization":
+        context_text = "Focus only on key events, actions, and outcomes."
+        if goal == "Low Cost":
+            example = "2 concise sentences: who/what happened and why it matters."
+            constraint = "Write exactly 2 sentences and keep total length under 50 words."
+        elif goal == "High Quality":
+            example = "3 concise sentences covering setup, action, and outcome."
+            constraint = "Write 3 concise sentences under 90 words with high factual fidelity."
+        else:
+            example = "3 concise sentences covering setup, action, and outcome."
+            constraint = "Write 2-3 sentences under 70 words with only essential details."
+    elif task == "Question Answering":
+        context_text = input_data[:120].strip()
+        example = (
+            "Answer in 3-4 short sentences with only essential calculations."
+            if goal == "High Quality"
+            else "Answer directly in a short paragraph with essential steps only."
+        )
+        if goal == "Low Cost":
+            constraint = "Answer accurately in at most 70 words using only essential calculations."
+        elif goal == "High Quality":
+            constraint = "Answer accurately in at most 110 words with only required calculations."
+        else:
+            constraint = "Answer accurately in at most 90 words with essential calculations only."
+    elif task == "Paraphrasing":
+        context_text = input_data[:120].strip()
+        example = "Rewrite in one concise sentence while preserving meaning."
+        constraint = "Return one concise sentence under 45 words with same meaning."
+    elif task == "Instruction Following":
+        context_text = input_data[:120].strip()
+        example = "Deliver a concise result with only required details."
+        constraint = (
+            "Follow all requirements in under 90 words."
+            if goal == "Low Cost"
+            else "Follow all requirements in under 120 words."
+        )
+    else:
+        context_text = input_data[:120].strip()
+        example = (
+            "Give a clear answer with strong structure."
+            if goal == "High Quality"
+            else "Answer directly in one short paragraph."
+        )
+        constraint = (
+            "Keep the answer under 80 words."
+            if goal == "Low Cost"
+            else "Ensure factual accuracy and clear structure."
+        )
+
+    instruction = _build_action_rewrite_instruction(
+        action_id,
+        task,
+        goal,
+        input_data,
+        context_text,
+        example,
+        constraint,
+    )
+    rewrite_prompt = (
+        f"{instruction}\n\n"
+        f"Current prompt:\n{current_prompt}\n\n"
+        "Return only the rewritten prompt. No commentary."
+    )
+    rewrite_tokens = max(120, min(260, count_tokens(current_prompt) * 3 + 40))
+    rewritten = (call_llm(rewrite_prompt, max_tokens=rewrite_tokens) or "").strip()
+    if rewritten.startswith("```"):
+        lines = rewritten.splitlines()
+        if len(lines) >= 3 and lines[-1].strip().startswith("```"):
+            rewritten = "\n".join(lines[1:-1]).strip()
+    if rewritten.startswith('"') and rewritten.endswith('"') and len(rewritten) >= 2:
+        rewritten = rewritten[1:-1].strip()
+    if rewritten.startswith("'") and rewritten.endswith("'") and len(rewritten) >= 2:
+        rewritten = rewritten[1:-1].strip()
+
+    return rewritten if rewritten else fallback_prompt
 
 
 def intelligent_action_selection(
@@ -559,6 +692,7 @@ def optimize_prompt_with_state(state: dict) -> dict:
     prompt = (state.get("prompt", "") or "").strip()
     input_data = (state.get("input", "") or "").strip()
     goal = state.get("goal", "Balanced")
+    use_intelligent_actions = USE_INTELLIGENT_ACTIONS and bool(HF_TOKEN)
 
     effective_max_steps = MAX_STEPS
     if OPTIMIZER_FAST_MODE:
@@ -679,8 +813,15 @@ def optimize_prompt_with_state(state: dict) -> dict:
             termination_reason = "voluntary_stop"
             break
 
-        # Apply action natively
-        new_prompt = apply_action_for_web(action_id, task, current_prompt, input_data, goal)
+        # Apply action (LLM-powered rewrite path when enabled)
+        if use_intelligent_actions:
+            if llm_calls_attempted >= MAX_LLM_CALLS_PER_RUN:
+                termination_reason = "latency_guard"
+                break
+            llm_calls_attempted += 1
+        new_prompt = apply_action_for_web(
+            action_id, task, current_prompt, input_data, goal, use_intelligent_actions=use_intelligent_actions
+        )
 
         if new_prompt == current_prompt:
             total_reward -= 0.1
@@ -1028,6 +1169,7 @@ def optimize_prompt_with_state(state: dict) -> dict:
         "llm_calls_attempted": llm_calls_attempted,
         "fallback_reason": fallback_reason or _LAST_LLM_ERROR,
         "llm_runtime": runtime_status,
+        "intelligent_actions_enabled": use_intelligent_actions,
     }
 
 

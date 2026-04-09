@@ -87,8 +87,8 @@ Every `reset()` and `step()` returns a `PromptObservation`. All fields always pr
 | `task_description` | `str` | What the prompt should accomplish |
 | `current_prompt` | `str` | Prompt after this step |
 | `previous_prompt` | `str` | Prompt before this step |
-| `current_score` | `float` [0,1] | ROUGE-L F1 of current prompt output |
-| `previous_score` | `float` [0,1] | ROUGE-L F1 before this step |
+| `current_score` | `float` (0,1) | ROUGE-L F1 of current prompt output |
+| `previous_score` | `float` (0,1) | ROUGE-L F1 before this step |
 | `current_token_count` | `int` | Word-level token count of current prompt |
 | `previous_token_count` | `int` | Token count before this step |
 | `token_budget` | `int` | Hard ceiling for this task (easy=80, medium=65, hard=55) |
@@ -195,10 +195,16 @@ Each task has a hard token ceiling. If any action would cause the prompt to exce
 |---|---|---|---|
 | `API_BASE_URL` | **Yes** | — | OpenAI-compatible endpoint. HF: `https://router.huggingface.co/v1/` |
 | `MODEL_NAME` | **Yes** | — | E.g. `Qwen/Qwen2.5-72B-Instruct` |
-| `HF_TOKEN` | **Yes** | — | HuggingFace token |
+| `OPENAI_API_KEY` | No | — | Preferred API key for OpenAI-compatible endpoints |
+| `HF_TOKEN` | No | — | HuggingFace token fallback if `OPENAI_API_KEY` is unset |
 | `MAX_STEPS` | No | `7` | Max steps per episode |
 | `DONE_THRESHOLD` | No | `0.85` | ROUGE-L for success bonus |
 | `TOKEN_PENALTY_ALPHA` | No | `0.02` | Cost penalty alpha in reward formula |
+| `USE_INTELLIGENT_ACTIONS` | No | `true` | Enable LLM-powered prompt rewrites for actions 0-4 |
+| `ACTION_LLM_TIMEOUT_SECONDS` | No | `30` | Timeout for each intelligent action rewrite call |
+| `ACTION_LLM_TEMPERATURE` | No | `0.2` | Sampling temperature for intelligent rewrites |
+| `ACTION_LLM_MAX_CALLS` | No | `250` | Safety cap for total action rewrite calls per process |
+| `ACTION_LLM_DRY_RUN` | No | `false` | Disable action rewrite API calls and always use deterministic fallback |
 | `GRADER` | No | `rouge` | `rouge` (no API) or `openai_client` |
 | `TASK_SEED` | No | random | Fix task (0–14) for reproducibility |
 

@@ -14,6 +14,7 @@ from rouge_score import rouge_scorer
 
 
 _ROUGE = rouge_scorer.RougeScorer(["rougeL"], use_stemmer=True)
+SCORE_EPSILON = 1e-4
 
 # Pre-written canned outputs per task_id for ROUGE mode.
 # Quality is intentionally moderate — represents what a model
@@ -87,9 +88,10 @@ DUMMY_OUTPUTS: dict[int, str] = {
 
 def _make_client() -> OpenAI:
     """Create OpenAI client from environment variables."""
+    api_key = os.getenv("OPENAI_API_KEY") or os.getenv("HF_TOKEN", "")
     return OpenAI(
         base_url=os.getenv("API_BASE_URL", "https://router.huggingface.co/v1/"),
-        api_key=os.getenv("HF_TOKEN", ""),
+        api_key=api_key,
     )
 
 
@@ -111,7 +113,7 @@ class Grader:
         Score a prompt against the reference answer.
 
         Returns:
-            (rouge_l_f1, llm_output) — score is float in [0.0, 1.0].
+            (rouge_l_f1, llm_output) — score is float in (0.0, 1.0).
         """
         llm_output = self._get_output(prompt, task_id)
         rouge_l = self._compute_rouge(llm_output, reference_answer)
@@ -143,11 +145,14 @@ class Grader:
         return response.choices[0].message.content or ""
 
     def _compute_rouge(self, hypothesis: str, reference: str) -> float:
-        """ROUGE-L F1 between hypothesis and reference. Returns float in [0.0, 1.0]."""
+        """ROUGE-L F1 between hypothesis and reference. Returns float in (0.0, 1.0)."""
         if not hypothesis or not reference:
-            return 0.0
+            return SCORE_EPSILON
         scores = _ROUGE.score(reference, hypothesis)
-        return round(scores["rougeL"].fmeasure, 4)
+        raw = float(scores["rougeL"].fmeasure)
+        # OpenEnv evaluator requires strict bounds: 0.0 < score < 1.0.
+        bounded = max(SCORE_EPSILON, min(1.0 - SCORE_EPSILON, raw))
+        return round(bounded, 4)
 
     @staticmethod
     def clip_reward(reward: float) -> float:

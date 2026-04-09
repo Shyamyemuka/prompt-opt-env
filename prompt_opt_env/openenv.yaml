@@ -25,10 +25,14 @@ env_vars:
     required: true
     secret: false
     description: Model identifier (e.g. Qwen/Qwen2.5-72B-Instruct)
-  - name: HF_TOKEN
-    required: true
+  - name: OPENAI_API_KEY
+    required: false
     secret: true
-    description: HuggingFace API token
+    description: API key for OpenAI-compatible providers (preferred)
+  - name: HF_TOKEN
+    required: false
+    secret: true
+    description: HuggingFace token fallback when OPENAI_API_KEY is not set
   - name: MAX_STEPS
     required: false
     default: "7"
@@ -41,6 +45,26 @@ env_vars:
     required: false
     default: "0.02"
     description: Cost penalty coefficient alpha in reward = quality_delta - alpha * token_overhead
+  - name: USE_INTELLIGENT_ACTIONS
+    required: false
+    default: "true"
+    description: Enable LLM-powered action transforms (falls back to deterministic actions on failure)
+  - name: ACTION_LLM_TIMEOUT_SECONDS
+    required: false
+    default: "30"
+    description: Timeout per intelligent action LLM call
+  - name: ACTION_LLM_TEMPERATURE
+    required: false
+    default: "0.2"
+    description: Sampling temperature for intelligent action rewrites
+  - name: ACTION_LLM_MAX_CALLS
+    required: false
+    default: "250"
+    description: Global cap on action rewrite LLM calls per process
+  - name: ACTION_LLM_DRY_RUN
+    required: false
+    default: "false"
+    description: If true, skip action rewrite API calls and force deterministic fallbacks
   - name: GRADER
     required: false
     default: "rouge"

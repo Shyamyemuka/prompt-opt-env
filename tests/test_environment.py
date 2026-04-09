@@ -18,8 +18,8 @@ def test_reset_returns_valid_observation():
     assert obs.reward == 0.0
     assert obs.done is False
     assert obs.step_count == 0
-    assert 0.0 <= obs.current_score <= 1.0
-    assert 0.0 <= obs.previous_score <= 1.0
+    assert 0.0 < obs.current_score < 1.0
+    assert 0.0 < obs.previous_score < 1.0
     assert obs.reference_answer != ""
     assert obs.current_token_count > 0
     assert obs.previous_token_count == 0
