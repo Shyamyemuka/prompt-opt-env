@@ -1,6 +1,6 @@
 # PromptOptEnv
 
-PromptOptEnv is a cost-aware prompt optimization environment that improves LLM prompts using reinforcement learning (RL) style actions while strictly tracking token spend. It addresses a critical real-world problem in prompt engineering: maximizing response quality often leads to bloated, expensive prompts. By framing prompt optimization as a constrained RL problem, PromptOptEnv trains agents to improve, compress, or explicitly stop editing a prompt to maximize quality *per token*.
+PromptOptEnv is a cost-aware prompt optimization environment that improves LLM prompts using reinforcement learning (RL) style actions while strictly tracking token spend. It addresses a critical real-world problem in prompt engineering: maximizing response quality often leads to bloated, expensive prompts. By framing prompt optimization as a constrained RL problem, PromptOptEnv trains agents to improve, compress, or explicitly stop editing a prompt to maximize quality _per token_.
 
 ## How It Works
 
@@ -16,9 +16,39 @@ PromptOptEnv evaluates the tradeoff between the cost of a prompt (input tokens) 
    - **5: STOP** (0 tokens, intentionally exits the loop when quality/cost tradeoff is optimal)
 3. **Reward Function**: `Quality_Delta - (Token_Penalty_Alpha * Token_Overhead)`. The agent is penalized for adding tokens without a proportionate jump in quality. Exceeding token budgets (e.g., 55 for hard tasks) fails the episode.
 
+## Tasks and Inputs
+
+The environment supports various prompt optimization tasks. Each task requires specific input fields:
+
+### 1. Summarization
+
+- **Input Text:** The source text or story that needs to be summarized.
+- **Initial Prompt:** The baseline or starting prompt to be optimized.
+- **Optimized Goal:** Select between _Balanced output_, _High-quality output_, or _Low-cost output_.
+
+### 2. Question Answering
+
+- **Context:** The background information providing facts for the answer.
+- **Question:** The query the model needs to answer.
+- **Initial Prompt:** The baseline or starting prompt to be optimized.
+- **Optimized Goal:** Select between _Balanced output_, _High-quality output_, or _Low-cost output_.
+
+### 3. Paraphrasing
+
+- **Sentence:** The target sentence to be rewritten or rephrased.
+- **Initial Prompt:** The baseline or starting prompt to be optimized.
+- **Optimized Goal:** Select between _Balanced output_, _High-quality output_, or _Low-cost output_.
+
+### 4. Instruction Following
+
+- **Instruction:** The specific instruction or rule the model needs to follow.
+- **Initial Prompt:** The baseline or starting prompt to be optimized.
+- **Optimized Goal:** Select between _Balanced output_, _High-quality output_, or _Low-cost output_.
+
 ## Installation & Setup
 
 ### Requirements
+
 - OS: Windows, macOS, or Linux
 - Python 3.11+
 - `uv` package manager
@@ -26,12 +56,14 @@ PromptOptEnv evaluates the tradeoff between the cost of a prompt (input tokens) 
 ### Step-by-step Setup
 
 1. Clone the repository and navigate to the project directory:
+
    ```bash
    git clone https://github.com/Shyamyemuka/prompt-opt-env.git
    cd prompt-opt-env
    ```
 
 2. Create a virtual environment and install dependencies:
+
    ```bash
    uv venv
    uv pip install -e "./prompt_opt_env[dev]"
@@ -53,6 +85,7 @@ To verify the installation and run the baseline sequence:
 ```bash
 python inference.py
 ```
+
 This executes the core cost-aware environment loop and prints an efficiency table detailing token spend vs. quality improvements.
 
 ## Usage Guide
@@ -62,12 +95,14 @@ This executes the core cost-aware environment loop and prints an efficiency tabl
 PromptOptEnv includes a web interface to visually step through the agent's optimization process.
 
 1. Start the API/OpenEnv backend server:
+
    ```bash
    cd prompt_opt_env
    uv run server
    ```
 
 2. In a new terminal, start the web interface:
+
    ```bash
    python web_app.py
    ```
@@ -79,6 +114,7 @@ PromptOptEnv includes a web interface to visually step through the agent's optim
 The environment can be packaged and deployed as an OpenEnv container to Hugging Face Spaces.
 
 1. Validate the environment configuration:
+
    ```bash
    cd prompt_opt_env
    openenv validate
@@ -88,11 +124,12 @@ The environment can be packaged and deployed as an OpenEnv container to Hugging 
    ```bash
    openenv push --repo-id <username>/prompt-opt-env
    ```
-*Note: Ensure `API_BASE_URL`, `MODEL_NAME`, and `HF_TOKEN` are configured as secrets in your Space settings.*
+   _Note: Ensure `API_BASE_URL`, `MODEL_NAME`, and `HF_TOKEN` are configured as secrets in your Space settings._
 
 ## Project Information
 
 ### Tech Stack
+
 - **Language**: Python 3.11+
 - **Frameworks**: OpenEnv, FastAPI, Uvicorn
 - **Model Client**: OpenAI Python SDK (compatible endpoints)
@@ -100,9 +137,11 @@ The environment can be packaged and deployed as an OpenEnv container to Hugging 
 - **Frontend**: Flask, HTML/Tailwind
 
 ### Roadmap & Status
+
 **Status:** Active Development. Current efforts are focused on expanding the task bank and refining the token penalty heuristics for smaller models.
 
 ### License
+
 This project is licensed under the MIT License.
 
 ## Collaboration
