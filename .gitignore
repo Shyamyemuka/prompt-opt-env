@@ -39,3 +39,11 @@ ARCHITECTURE_UPGRADE.md
 architecture_upgrade.md
 CLAUDE.md
 claude.md
+
+# Output logs and text files
+inference_run_output.txt
+push_out.txt
+docker_build.txt
+uv_error.txt
+prompt_opt_env/docker_build.txt
+prompt_opt_env/uv_error.txt
