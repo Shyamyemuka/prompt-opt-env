@@ -146,7 +146,7 @@ To verify the installation and run the baseline sequence:
 python inference.py
 ```
 
-This executes the core cost-aware environment loop and prints an efficiency table detailing token spend vs. quality improvements.
+This executes the core cost-aware inference loop and prints only the required structured `[START]`, `[STEP]`, and `[END]` lines for each episode.
 
 ## Usage Guide
 

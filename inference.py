@@ -7,7 +7,7 @@ Mandatory expectations:
 - reads API_BASE_URL, MODEL_NAME, OPENAI_API_KEY (or HF_TOKEN fallback) from environment
 - runs 3 tasks (easy, medium, hard)
 - emits structured logs with [START], [STEP], [END]
-- prints summary table and exits with status code 0
+- keeps stdout limited to the required log lines
 """
 
 import os
@@ -51,6 +51,8 @@ BENCHMARK = os.getenv("BENCHMARK_NAME", "prompt_opt_env")
 ALPHA = float(os.getenv("TOKEN_PENALTY_ALPHA", "0.02"))
 MAX_STEPS = int(os.getenv("MAX_STEPS", "7"))
 INFERENCE_SEED = int(os.getenv("INFERENCE_SEED", "42"))
+LLM_TIMEOUT_SECONDS = float(os.getenv("LLM_TIMEOUT_SECONDS", "8"))
+SUCCESS_THRESHOLD = float(os.getenv("SUCCESS_THRESHOLD", "0.85"))
 SCORE_EPSILON = 1e-4
 USE_INTELLIGENT_ACTIONS = os.getenv("USE_INTELLIGENT_ACTIONS", "true").lower() == "true"
 
@@ -71,6 +73,7 @@ if API_KEY:
         base_url=API_BASE_URL,
         api_key=API_KEY,
         max_retries=int(os.getenv("LLM_MAX_RETRIES", "2")),
+        timeout=LLM_TIMEOUT_SECONDS,
     )
 
 _ROUGE = rouge_scorer.RougeScorer(["rougeL"], use_stemmer=True)
@@ -216,6 +219,12 @@ def emit_start(task: dict) -> None:
     print(f"[START] task={task_name} env={BENCHMARK} model={MODEL_NAME}", flush=True)
 
 
+def _single_line(value: str | None) -> str:
+    if not value:
+        return "null"
+    return " ".join(str(value).split()) or "null"
+
+
 def emit_step(
     step_num: int,
     action_id: int,
@@ -224,7 +233,7 @@ def emit_step(
     error: str | None = None,
 ) -> None:
     done_val = str(done).lower()
-    error_val = error if error else "null"
+    error_val = _single_line(error)
     print(
         f"[STEP] step={step_num} action={ACTION_NAMES[action_id]} "
         f"reward={reward:.2f} done={done_val} error={error_val}",
@@ -253,6 +262,7 @@ def run_episode(task: dict, max_steps: int = 7) -> dict:
     total_reward = 0.0
     rewards: list[float] = []
     steps = 0
+    episode_success = False
     result = {
         "task_id": task["task_id"],
         "difficulty": task["difficulty"],
@@ -272,63 +282,74 @@ def run_episode(task: dict, max_steps: int = 7) -> dict:
             action_id = random.randint(0, 5)
             step_num = step_idx + 1
 
-            if action_id == 5:
-                reward = round(current_score * 1.5, 4)
-                total_reward += reward
-                rewards.append(reward)
-                steps = step_num
-                emit_step(step_num, action_id, reward, True, None)
-                break
+            try:
+                if action_id == 5:
+                    reward = round(current_score * 1.5, 4)
+                    total_reward += reward
+                    rewards.append(reward)
+                    steps = step_num
+                    episode_success = current_score >= SUCCESS_THRESHOLD
+                    emit_step(step_num, action_id, reward, True, None)
+                    break
 
-            if USE_INTELLIGENT_ACTIONS and _INTELLIGENT_ACTIONS_AVAILABLE:
-                new_prompt = apply_intelligent(action_id, prompt, task)
-            else:
-                new_prompt = apply(action_id, prompt, task)
-            if new_prompt == prompt:
-                reward = -0.1
+                if USE_INTELLIGENT_ACTIONS and _INTELLIGENT_ACTIONS_AVAILABLE:
+                    new_prompt = apply_intelligent(action_id, prompt, task)
+                else:
+                    new_prompt = apply(action_id, prompt, task)
+                if new_prompt == prompt:
+                    reward = -0.1
+                    total_reward += reward
+                    rewards.append(reward)
+                    steps = step_num
+                    done = step_num >= max_steps
+                    episode_success = done and current_score >= SUCCESS_THRESHOLD
+                    emit_step(step_num, action_id, reward, done, None)
+                    if done:
+                        break
+                    continue
+
+                new_tokens = count_tokens(new_prompt)
+                if new_tokens > task["token_budget"]:
+                    reward = -0.5
+                    total_reward += reward
+                    rewards.append(reward)
+                    steps = step_num
+                    episode_success = False
+                    emit_step(step_num, action_id, reward, True, None)
+                    break
+
+                new_output = call_llm(new_prompt, task["reference"])
+                new_score = rouge_l(new_output, task["reference"])
+                token_overhead = new_tokens - current_tokens
+                reward = round(new_score - current_score - ALPHA * token_overhead, 4)
+
+                done = False
+                if new_score > SUCCESS_THRESHOLD:
+                    reward = round(reward + 1.0, 4)
+                    done = True
+                    episode_success = True
+                elif step_num >= max_steps:
+                    done = True
+                    episode_success = new_score >= SUCCESS_THRESHOLD
+
+                prompt = new_prompt
+                current_score = new_score
+                current_tokens = new_tokens
                 total_reward += reward
                 rewards.append(reward)
                 steps = step_num
-                done = step_num >= max_steps
+
                 emit_step(step_num, action_id, reward, done, None)
+
                 if done:
                     break
-                continue
-
-            new_tokens = count_tokens(new_prompt)
-            if new_tokens > task["token_budget"]:
-                reward = -0.5
+            except Exception as step_error:
+                reward = 0.0
                 total_reward += reward
                 rewards.append(reward)
                 steps = step_num
-                emit_step(step_num, action_id, reward, True, "budget_exceeded")
-                break
-
-            new_output = call_llm(new_prompt, task["reference"])
-            new_score = rouge_l(new_output, task["reference"])
-            token_overhead = new_tokens - current_tokens
-            reward = round(new_score - current_score - ALPHA * token_overhead, 4)
-
-            done = False
-            reason = "continue"
-            if new_score > 0.85:
-                reward = round(reward + 1.0, 4)
-                done = True
-                reason = "success"
-            elif step_num >= max_steps:
-                done = True
-                reason = "max_steps"
-
-            prompt = new_prompt
-            current_score = new_score
-            current_tokens = new_tokens
-            total_reward += reward
-            rewards.append(reward)
-            steps = step_num
-
-            emit_step(step_num, action_id, reward, done, None if reason == "continue" else reason)
-
-            if done:
+                episode_success = False
+                emit_step(step_num, action_id, reward, True, str(step_error))
                 break
     finally:
         result["final_score"] = current_score
@@ -336,7 +357,7 @@ def run_episode(task: dict, max_steps: int = 7) -> dict:
         result["efficiency"] = round(current_score / max(1, current_tokens), 6)
         result["total_reward"] = round(total_reward, 4)
         result["rewards"] = rewards
-        result["success"] = bool(current_score >= 0.1)
+        result["success"] = episode_success
         result["steps"] = steps
         emit_end(result)
 
