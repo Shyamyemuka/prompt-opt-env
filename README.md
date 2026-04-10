@@ -202,7 +202,7 @@ The environment can be packaged and deployed as an OpenEnv container to Hugging 
 
 ### License
 
-This project is licensed under the MIT License.
+This project is licensed under the BSD-3-Clause License.
 
 ## Collaboration
 

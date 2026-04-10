@@ -6,11 +6,6 @@ and verify the full client-server round trip.
 """
 
 import pytest
-import asyncio
-
-# Mark all tests in this file as integration (skipped by default in CI without server)
-pytestmark = pytest.mark.asyncio
-
 
 @pytest.fixture
 def anyio_backend():
