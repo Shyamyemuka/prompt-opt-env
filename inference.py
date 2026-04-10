@@ -43,6 +43,8 @@ _load_env_local()
 API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1/")
 MODEL_NAME = os.getenv("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
 HF_TOKEN = os.getenv("HF_TOKEN")
+if HF_TOKEN is None:
+    raise ValueError("HF_TOKEN environment variable is required")
 LOCAL_IMAGE_NAME = os.getenv("LOCAL_IMAGE_NAME")
 API_KEY = HF_TOKEN or os.getenv("API_KEY")
 BENCHMARK = os.getenv("BENCHMARK_NAME", "prompt_opt_env")
@@ -232,9 +234,9 @@ def emit_step(
 
 def emit_end(result: dict) -> None:
     rewards_str = ",".join(f"{r:.2f}" for r in result["rewards"])
+    # Format strictly per guidelines: success, steps, rewards only
     print(
-        f"[END] success={str(result['success']).lower()} steps={result['steps']} "
-        f"score={result['final_score']:.4f} rewards={rewards_str}",
+        f"[END] success={str(result['success']).lower()} steps={result['steps']} rewards={rewards_str}",
         flush=True,
     )
 
@@ -358,6 +360,6 @@ if __name__ == "__main__":
     try:
         main()
     except Exception as fatal_error:
-        _ = fatal_error
+        print(f"[ERROR] {fatal_error}", file=sys.stderr, flush=True)
     finally:
         sys.exit(0)
