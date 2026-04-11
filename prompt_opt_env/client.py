@@ -6,7 +6,7 @@ from openenv.core import EnvClient
 from openenv.core.client_types import StepResult
 from openenv.core.env_server.types import State
 
-from .models import PromptAction, PromptObservation
+from .models import PromptAction, PromptObservation, STRICT_SCORE_FLOOR
 
 
 class PromptOptEnvEnv(
@@ -54,18 +54,20 @@ class PromptOptEnvEnv(
             StepResult with a fully populated PromptObservation.
         """
         obs_data = payload.get("observation", {})
+        safe_score = STRICT_SCORE_FLOOR
+        safe_reward = float(obs_data.get("reward", payload.get("reward", safe_score)))
         observation = PromptObservation(
             task_description=obs_data.get("task_description", ""),
             current_prompt=obs_data.get("current_prompt", ""),
             previous_prompt=obs_data.get("previous_prompt", ""),
-            current_score=obs_data.get("current_score", 0.0),
-            previous_score=obs_data.get("previous_score", 0.0),
+            current_score=float(obs_data.get("current_score", safe_score)),
+            previous_score=float(obs_data.get("previous_score", safe_score)),
             current_token_count=obs_data.get("current_token_count", 0),
             previous_token_count=obs_data.get("previous_token_count", 0),
             token_budget=obs_data.get("token_budget", 80),
             tokens_remaining=obs_data.get("tokens_remaining", 80),
             token_overhead=obs_data.get("token_overhead", 0),
-            reward=obs_data.get("reward", payload.get("reward", 0.0)),
+            reward=safe_reward,
             done=obs_data.get("done", payload.get("done", False)),
             step_count=obs_data.get("step_count", 0),
             reference_answer=obs_data.get("reference_answer", ""),
@@ -74,7 +76,7 @@ class PromptOptEnvEnv(
 
         return StepResult(
             observation=observation,
-            reward=payload.get("reward", 0.0),
+            reward=float(payload.get("reward", safe_reward)),
             done=payload.get("done", False),
         )
 

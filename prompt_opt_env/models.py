@@ -8,6 +8,8 @@ from pydantic import BaseModel, Field
 
 from openenv.core.env_server.types import Action, Observation
 
+STRICT_SCORE_FLOOR = 0.11
+
 
 class PromptAction(Action):
     """
@@ -35,8 +37,8 @@ class PromptObservation(Observation):
     task_description: str = Field(..., description="What the prompt should accomplish")
     current_prompt: str = Field(..., description="Prompt after this step's action")
     previous_prompt: str = Field(..., description="Prompt before this step (empty at reset)")
-    current_score: float = Field(..., gt=0.0, lt=1.0, description="ROUGE-L F1 of current prompt output (strictly between 0 and 1)")
-    previous_score: float = Field(..., gt=0.0, lt=1.0, description="ROUGE-L F1 before this step (strictly between 0 and 1)")
+    current_score: float = Field(..., gt=0, lt=1, description="ROUGE-L F1 of current prompt output (strictly between 0 and 1)")
+    previous_score: float = Field(..., gt=0, lt=1, description="ROUGE-L F1 before this step (strictly between 0 and 1)")
     current_token_count: int = Field(..., ge=0, description="Word-level token count of current prompt")
     previous_token_count: int = Field(..., ge=0, description="Word-level token count before this step")
     token_budget: int = Field(..., ge=1, description="Hard ceiling on prompt token count for this task")

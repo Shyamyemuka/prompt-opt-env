@@ -114,7 +114,7 @@ class Grader:
         Score a prompt against the reference answer.
 
         Returns:
-            (rouge_l_f1, llm_output) — score is float in (0.0, 1.0).
+            (rouge_l_f1, llm_output) — score is float in (0, 1).
         """
         llm_output = self._get_output(prompt, task_id)
         rouge_l = self._compute_rouge(llm_output, reference_answer)
@@ -145,14 +145,14 @@ class Grader:
         return text
 
     def _compute_rouge(self, hypothesis: str, reference: str) -> float:
-        """ROUGE-L F1 between hypothesis and reference. Returns float in (0.0, 1.0)."""
+        """ROUGE-L F1 between hypothesis and reference. Returns float in (0, 1)."""
         if not hypothesis or not reference:
             return SCORE_EPSILON
         scores = _ROUGE.score(reference, hypothesis)
         raw = float(scores["rougeL"].fmeasure)
         if not math.isfinite(raw):
             return SCORE_EPSILON
-        # OpenEnv evaluator requires strict bounds: 0.0 < score < 1.0.
+        # OpenEnv evaluator requires strict bounds: 0 < score < 1.
         bounded = max(SCORE_EPSILON, min(1.0 - SCORE_EPSILON, raw))
         rounded = round(bounded, 4)
         return float(max(SCORE_EPSILON, min(1.0 - SCORE_EPSILON, rounded)))

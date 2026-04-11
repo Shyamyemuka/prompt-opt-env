@@ -10,7 +10,7 @@ def test_rouge_score_returns_float():
     grader = Grader(grader_type="rouge")
     score, output = grader.score("Explain recursion.", "Recursion calls itself.", task_id=14)
     assert isinstance(score, float)
-    assert 0.0 < score < 1.0
+    assert 0 < score < 1
 
 
 def test_rouge_score_is_nonzero_for_related_content():
@@ -47,7 +47,7 @@ def test_openai_api_fallback_on_failure():
     with patch.object(grader, "_call_llm", side_effect=Exception("API down")):
         score, output = grader.score("test prompt", "reference answer", task_id=0)
     assert isinstance(score, float)
-    assert 0.0 < score < 1.0
+    assert 0 < score < 1
     assert output == DUMMY_OUTPUTS[0]  # fell back to dummy
 
 
@@ -61,4 +61,4 @@ def test_compute_rouge_empty_inputs():
 def test_compute_rouge_exact_match_stays_below_one():
     grader = Grader()
     score = grader._compute_rouge("identical answer", "identical answer")
-    assert 0.0 < score < 1.0
+    assert 0 < score < 1
