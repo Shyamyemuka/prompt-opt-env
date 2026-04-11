@@ -60,7 +60,7 @@ LLM_TIMEOUT_SECONDS = float(os.getenv("LLM_TIMEOUT_SECONDS", "8"))
 LLM_FAILOVER_ATTEMPTS = max(1, int(os.getenv("LLM_FAILOVER_ATTEMPTS", "2")))
 LLM_FAILOVER_BACKOFF_SECONDS = max(0.0, float(os.getenv("LLM_FAILOVER_BACKOFF_SECONDS", "0.25")))
 SUCCESS_THRESHOLD = float(os.getenv("SUCCESS_THRESHOLD", "0.85"))
-SCORE_EPSILON = 1e-4
+SCORE_EPSILON = 0.05
 USE_INTELLIGENT_ACTIONS = os.getenv("USE_INTELLIGENT_ACTIONS", "true").lower() == "true"
 
 def _load_apply_action_intelligent():
