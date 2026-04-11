@@ -19,7 +19,7 @@ except (ModuleNotFoundError, ImportError):
 
 
 _ROUGE = rouge_scorer.RougeScorer(["rougeL"], use_stemmer=True)
-SCORE_EPSILON = 0.05
+SCORE_EPSILON = 0.11
 
 # Pre-written canned outputs per task_id for ROUGE mode.
 # Quality is intentionally moderate — represents what a model

@@ -60,7 +60,7 @@ LLM_TIMEOUT_SECONDS = float(os.getenv("LLM_TIMEOUT_SECONDS", "8"))
 LLM_FAILOVER_ATTEMPTS = max(1, int(os.getenv("LLM_FAILOVER_ATTEMPTS", "2")))
 LLM_FAILOVER_BACKOFF_SECONDS = max(0.0, float(os.getenv("LLM_FAILOVER_BACKOFF_SECONDS", "0.25")))
 SUCCESS_THRESHOLD = float(os.getenv("SUCCESS_THRESHOLD", "0.85"))
-SCORE_EPSILON = 0.05
+SCORE_EPSILON = 0.11
 USE_INTELLIGENT_ACTIONS = os.getenv("USE_INTELLIGENT_ACTIONS", "true").lower() == "true"
 
 def _load_apply_action_intelligent():
@@ -301,7 +301,7 @@ def _single_line(value: str | None) -> str:
 
 def _strict_unit(value: float) -> float:
     """Keep emitted step metrics inside strict (0,1) for validator compatibility."""
-    return float(max(0.01, min(0.99, round(float(value), 4))))
+    return float(max(0.11, min(0.89, round(float(value), 4))))
 
 
 def emit_step(

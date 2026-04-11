@@ -125,7 +125,7 @@ _ACTIVE_API_BASE_URL: str = _API_BASE_URL_CANDIDATES[0] if _API_BASE_URL_CANDIDA
 _LAST_LLM_ERROR = ""
 _LAST_LLM_FINISH_REASON = ""
 _ROUGE = rouge_scorer.RougeScorer(["rougeL"], use_stemmer=True)
-SCORE_EPSILON = 0.05
+SCORE_EPSILON = 0.11
 _LLM_ROUTER = create_default_router(
     default_model=MODEL_NAME,
     default_base_url=API_BASE_URL,

@@ -46,7 +46,7 @@ TOKEN_PENALTY_ALPHA: float = float(os.getenv("TOKEN_PENALTY_ALPHA", "0.02"))
 GRADER_TYPE: str          = os.getenv("GRADER", "rouge")
 _TASK_SEED: str | None    = os.getenv("TASK_SEED", None)
 USE_INTELLIGENT_ACTIONS: bool = os.getenv("USE_INTELLIGENT_ACTIONS", "true").lower() == "true"
-MIN_VALID_SCORE: float = 0.05
+MIN_VALID_SCORE: float = 0.11
 
 
 def _strict_score(value: float) -> float:
