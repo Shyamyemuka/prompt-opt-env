@@ -138,6 +138,11 @@ ACTION_NAMES = {
 }
 
 
+def _safe_model_for_logs(model_name: str) -> str:
+    """Avoid float-like substrings (e.g. 2.5) in START logs for brittle parsers."""
+    return model_name.replace(".", "_")
+
+
 EVAL_TASKS = [
     {
         "task_id": 4,
@@ -284,7 +289,8 @@ def rouge_l(hypothesis: str, reference: str) -> float:
 
 def emit_start(task: dict) -> None:
     task_name = f"task_{task['task_id']}_{task['difficulty']}"
-    print(f"[START] task={task_name} env={BENCHMARK} model={MODEL_NAME}", flush=True)
+    model_for_logs = _safe_model_for_logs(MODEL_NAME)
+    print(f"[START] task={task_name} env={BENCHMARK} model={model_for_logs}", flush=True)
 
 
 def _single_line(value: str | None) -> str:
