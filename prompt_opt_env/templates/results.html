@@ -173,15 +173,20 @@
         </div>
     </div>
 
-    {% if used_fallback %}
-    <div class="mt-6 p-4 bg-red-900/20 border border-red-500/30 rounded-lg text-sm text-red-200">
-        {% if offline_mode %}
-        <strong>Offline Mode:</strong> All LLM API calls failed, so fallback outputs were used for this run.<br>
-        {% else %}
-        <strong>Partial Fallback:</strong> Some LLM API calls failed, so fallback outputs were used for part of this run.<br>
+    {% if fallback_notice.show %}
+    <div class="mt-6 p-4 rounded-lg text-sm {% if fallback_notice.severity == 'danger' %}bg-red-900/20 border border-red-500/30 text-red-200{% elif fallback_notice.severity == 'warning' %}bg-amber-900/20 border border-amber-500/30 text-amber-100{% else %}bg-slate-900/40 border border-slate-500/30 text-slate-200{% endif %}">
+        <strong>{{ fallback_notice.title }}</strong><br>
+        {{ fallback_notice.message }}<br>
+        {% if fallback_notice.action %}
+        <span class="font-medium">Action:</span> {{ fallback_notice.action }}<br>
         {% endif %}
-        Reason: {{ fallback_reason or "unknown_connection_error" }}<br>
-        Endpoint: {{ llm_runtime.api_base_url }} | Model: {{ llm_runtime.model_name }} | Fallback calls: {{ fallback_calls }}/{{ llm_calls_attempted }}
+        Endpoint: {{ llm_runtime.api_base_url }} | Model: {{ llm_runtime.model_name }} | Fallback calls: {{ fallback_notice.fallback_calls }}/{{ fallback_notice.llm_calls_attempted }}
+        {% if fallback_notice.raw_reason and fallback_notice.severity != 'info' %}
+        <details class="mt-2 text-xs text-current/90">
+            <summary class="cursor-pointer">Technical details</summary>
+            <div class="mt-1">{{ fallback_notice.raw_reason }}</div>
+        </details>
+        {% endif %}
     </div>
     {% endif %}
 

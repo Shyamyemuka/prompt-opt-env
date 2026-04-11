@@ -189,14 +189,24 @@ def get_llm_runtime_status() -> dict[str, Any]:
     """Expose sanitized runtime status for debugging connection/key issues."""
     router_status = _LLM_ROUTER.status()
     providers = router_status.get("providers", [])
-    first_base = providers[0]["base_url"] if providers else API_BASE_URL
+    active_provider = str(router_status.get("active_provider") or "").strip()
+    selected_provider = None
+    for provider in providers:
+        if provider.get("name") == active_provider:
+            selected_provider = provider
+            break
+    if selected_provider is None and providers:
+        selected_provider = providers[0]
+
+    first_base = selected_provider["base_url"] if selected_provider else API_BASE_URL
+    model_name = selected_provider.get("model") if selected_provider else MODEL_NAME
     return {
         "api_base_url": first_base,
         "api_base_candidates": _API_BASE_URL_CANDIDATES,
-        "model_name": MODEL_NAME,
+        "model_name": model_name,
         "token_present": bool(router_status.get("has_provider")),
         "providers": providers,
-        "active_provider": router_status.get("active_provider"),
+        "active_provider": active_provider,
         "llm_timeout_seconds": LLM_TIMEOUT_SECONDS,
         "llm_max_retries": LLM_MAX_RETRIES,
         "optimizer_fast_mode": OPTIMIZER_FAST_MODE,
@@ -210,6 +220,100 @@ def get_llm_runtime_status() -> dict[str, Any]:
         ),
         "last_llm_error": router_status.get("last_error") or _LAST_LLM_ERROR,
         "last_finish_reason": router_status.get("last_finish_reason") or _LAST_LLM_FINISH_REASON,
+    }
+
+
+def _build_fallback_notice(
+    used_fallback: bool,
+    offline_mode: bool,
+    fallback_calls: int,
+    llm_calls_attempted: int,
+    fallback_reason: str,
+) -> dict[str, Any]:
+    """Return a user-facing notice that is quiet for benign failover and loud for actionable issues."""
+    if not used_fallback:
+        return {
+            "show": False,
+            "severity": "info",
+            "title": "",
+            "message": "",
+            "action": "",
+            "fallback_calls": fallback_calls,
+            "llm_calls_attempted": llm_calls_attempted,
+            "raw_reason": "",
+        }
+
+    attempts = max(1, llm_calls_attempted)
+    ratio = fallback_calls / attempts
+    reason_clean = " ".join((fallback_reason or "").split())
+    reason = reason_clean.lower()
+
+    if any(token in reason for token in ("missing_api_key", "no_provider_configured")):
+        category = "credentials"
+    elif any(token in reason for token in ("401", "unauthorized", "invalid_api_key", "authentication")):
+        category = "credentials"
+    elif any(token in reason for token in ("invalid model", "model_not_found", "invalid model id")):
+        category = "model"
+    elif any(token in reason for token in ("402", "quota", "billing", "credits", "depleted", "429", "rate limit")):
+        category = "quota"
+    elif any(token in reason for token in ("timeout", "connection", "503", "502", "504", "temporar", "server")):
+        category = "transient"
+    else:
+        category = "unknown"
+
+    # Suppress noisy notices for rare transient misses when most calls succeeded.
+    if category == "transient" and not offline_mode and ratio <= 0.15:
+        return {
+            "show": False,
+            "severity": "info",
+            "title": "",
+            "message": "",
+            "action": "",
+            "fallback_calls": fallback_calls,
+            "llm_calls_attempted": llm_calls_attempted,
+            "raw_reason": reason_clean,
+        }
+
+    severity = "warning"
+    title = "Partial fallback outputs were used."
+    message = "Some generations used fallback text because all providers failed for those calls."
+    action = ""
+
+    if offline_mode:
+        severity = "danger"
+        title = "Offline mode: all LLM calls failed."
+
+    if category == "quota":
+        if offline_mode:
+            severity = "danger"
+        title = "Provider quota/credits exceeded during this run."
+        message = "Failover is working, but at least one provider is out of quota/credits."
+        action = "Top up Hugging Face credits and/or increase OpenAI quota to remove fallback usage."
+    elif category == "credentials":
+        severity = "danger"
+        title = "Provider authentication is misconfigured."
+        message = "At least one provider key is invalid or missing for current endpoint usage."
+        action = "Verify OPENAI_API_KEY, GEMINI_API_KEY, and HF_TOKEN in Space secrets."
+    elif category == "model":
+        severity = "danger"
+        title = "Provider model configuration mismatch detected."
+        message = "A provider rejected the configured model ID for its endpoint."
+        action = "Set provider-specific model vars (OPENAI_MODEL, GEMINI_MODEL, HF_MODEL) to valid IDs."
+    elif category == "transient":
+        severity = "warning" if offline_mode or ratio > 0.3 else "info"
+        title = "Temporary provider/network instability detected."
+        message = "Most runs should still complete, but some calls timed out or failed transiently."
+        action = "If frequent, increase LLM timeout or reduce concurrent traffic."
+
+    return {
+        "show": True,
+        "severity": severity,
+        "title": title,
+        "message": message,
+        "action": action,
+        "fallback_calls": fallback_calls,
+        "llm_calls_attempted": llm_calls_attempted,
+        "raw_reason": reason_clean,
     }
 
 
@@ -1126,6 +1230,13 @@ def optimize_prompt_with_state(state: dict) -> dict:
     runtime_status = get_llm_runtime_status()
     fallback_reason = " | ".join(fallback_reasons)
     offline_mode = bool(used_fallback and llm_calls_attempted > 0 and fallback_calls == llm_calls_attempted)
+    fallback_notice = _build_fallback_notice(
+        used_fallback=used_fallback,
+        offline_mode=offline_mode,
+        fallback_calls=fallback_calls,
+        llm_calls_attempted=llm_calls_attempted,
+        fallback_reason=fallback_reason or _LAST_LLM_ERROR,
+    )
 
     return {
         "task": task,
@@ -1162,6 +1273,7 @@ def optimize_prompt_with_state(state: dict) -> dict:
         "fallback_calls": fallback_calls,
         "llm_calls_attempted": llm_calls_attempted,
         "fallback_reason": fallback_reason or _LAST_LLM_ERROR,
+        "fallback_notice": fallback_notice,
         "llm_runtime": runtime_status,
         "intelligent_actions_enabled": use_intelligent_actions,
     }
@@ -2088,15 +2200,20 @@ def _write_results_html(tpl_dir: str):
         </div>
     </div>
 
-    {% if used_fallback %}
-    <div class="mt-6 p-4 bg-red-900/20 border border-red-500/30 rounded-lg text-sm text-red-200">
-        {% if offline_mode %}
-        <strong>Offline Mode:</strong> All LLM API calls failed, so fallback outputs were used for this run.<br>
-        {% else %}
-        <strong>Partial Fallback:</strong> Some LLM API calls failed, so fallback outputs were used for part of this run.<br>
+    {% if fallback_notice.show %}
+    <div class="mt-6 p-4 rounded-lg text-sm {% if fallback_notice.severity == 'danger' %}bg-red-900/20 border border-red-500/30 text-red-200{% elif fallback_notice.severity == 'warning' %}bg-amber-900/20 border border-amber-500/30 text-amber-100{% else %}bg-slate-900/40 border border-slate-500/30 text-slate-200{% endif %}">
+        <strong>{{ fallback_notice.title }}</strong><br>
+        {{ fallback_notice.message }}<br>
+        {% if fallback_notice.action %}
+        <span class="font-medium">Action:</span> {{ fallback_notice.action }}<br>
         {% endif %}
-        Reason: {{ fallback_reason or "unknown_connection_error" }}<br>
-        Endpoint: {{ llm_runtime.api_base_url }} | Model: {{ llm_runtime.model_name }} | Fallback calls: {{ fallback_calls }}/{{ llm_calls_attempted }}
+        Endpoint: {{ llm_runtime.api_base_url }} | Model: {{ llm_runtime.model_name }} | Fallback calls: {{ fallback_notice.fallback_calls }}/{{ fallback_notice.llm_calls_attempted }}
+        {% if fallback_notice.raw_reason and fallback_notice.severity != 'info' %}
+        <details class="mt-2 text-xs text-current/90">
+            <summary class="cursor-pointer">Technical details</summary>
+            <div class="mt-1">{{ fallback_notice.raw_reason }}</div>
+        </details>
+        {% endif %}
     </div>
     {% endif %}
 
