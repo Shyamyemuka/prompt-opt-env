@@ -14,6 +14,8 @@ import os
 import random
 import re
 import sys
+import time
+from importlib import import_module
 from types import SimpleNamespace
 
 from openai import OpenAI
@@ -43,37 +45,85 @@ _load_env_local()
 API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1/")
 MODEL_NAME = os.getenv("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
 HF_TOKEN = os.getenv("HF_TOKEN")
-if HF_TOKEN is None:
+if HF_TOKEN is None or not HF_TOKEN.strip():
     raise ValueError("HF_TOKEN environment variable is required")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 LOCAL_IMAGE_NAME = os.getenv("LOCAL_IMAGE_NAME")
-API_KEY = HF_TOKEN or os.getenv("API_KEY")
+OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1/")
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", MODEL_NAME)
+API_KEY = OPENAI_API_KEY or HF_TOKEN or os.getenv("API_KEY")
 BENCHMARK = os.getenv("BENCHMARK_NAME", "prompt_opt_env")
 ALPHA = float(os.getenv("TOKEN_PENALTY_ALPHA", "0.02"))
 MAX_STEPS = int(os.getenv("MAX_STEPS", "7"))
 INFERENCE_SEED = int(os.getenv("INFERENCE_SEED", "42"))
 LLM_TIMEOUT_SECONDS = float(os.getenv("LLM_TIMEOUT_SECONDS", "8"))
+LLM_FAILOVER_ATTEMPTS = max(1, int(os.getenv("LLM_FAILOVER_ATTEMPTS", "2")))
+LLM_FAILOVER_BACKOFF_SECONDS = max(0.0, float(os.getenv("LLM_FAILOVER_BACKOFF_SECONDS", "0.25")))
 SUCCESS_THRESHOLD = float(os.getenv("SUCCESS_THRESHOLD", "0.85"))
 SCORE_EPSILON = 1e-4
 USE_INTELLIGENT_ACTIONS = os.getenv("USE_INTELLIGENT_ACTIONS", "true").lower() == "true"
 
+def _load_apply_action_intelligent():
+    for module_name in ("prompt_opt_env.server.actions_llm", "server.actions_llm"):
+        try:
+            module = import_module(module_name)
+            return module.apply_action_intelligent
+        except Exception:
+            continue
+    raise ModuleNotFoundError("Unable to import actions_llm from known module paths")
+
+
 try:
-    from prompt_opt_env.server.actions_llm import apply_action_intelligent
+    apply_action_intelligent = _load_apply_action_intelligent()
     _INTELLIGENT_ACTIONS_AVAILABLE = True
 except Exception:
-    try:
-        from server.actions_llm import apply_action_intelligent
-        _INTELLIGENT_ACTIONS_AVAILABLE = True
-    except Exception:
-        _INTELLIGENT_ACTIONS_AVAILABLE = False
+    _INTELLIGENT_ACTIONS_AVAILABLE = False
 
 random.seed(INFERENCE_SEED)
-_OPENAI_CLIENT = None
-if API_KEY:
-    _OPENAI_CLIENT = OpenAI(
-        base_url=API_BASE_URL,
-        api_key=API_KEY,
-        max_retries=int(os.getenv("LLM_MAX_RETRIES", "2")),
-        timeout=LLM_TIMEOUT_SECONDS,
+_OPENAI_CLIENTS: list[dict[str, object]] = []
+_CLIENT_RETRIES = int(os.getenv("LLM_MAX_RETRIES", "2"))
+
+if OPENAI_API_KEY:
+    _OPENAI_CLIENTS.append(
+        {
+            "name": "openai",
+            "model": OPENAI_MODEL,
+            "client": OpenAI(
+                base_url=OPENAI_BASE_URL,
+                api_key=OPENAI_API_KEY,
+                max_retries=_CLIENT_RETRIES,
+                timeout=LLM_TIMEOUT_SECONDS,
+            ),
+        }
+    )
+
+if HF_TOKEN:
+    _OPENAI_CLIENTS.append(
+        {
+            "name": "hf",
+            "model": MODEL_NAME,
+            "client": OpenAI(
+                base_url=API_BASE_URL,
+                api_key=HF_TOKEN,
+                max_retries=_CLIENT_RETRIES,
+                timeout=LLM_TIMEOUT_SECONDS,
+            ),
+        }
+    )
+
+legacy_api_key = (os.getenv("API_KEY") or "").strip()
+if legacy_api_key and not _OPENAI_CLIENTS:
+    _OPENAI_CLIENTS.append(
+        {
+            "name": "legacy",
+            "model": MODEL_NAME,
+            "client": OpenAI(
+                base_url=API_BASE_URL,
+                api_key=legacy_api_key,
+                max_retries=_CLIENT_RETRIES,
+                timeout=LLM_TIMEOUT_SECONDS,
+            ),
+        }
     )
 
 _ROUGE = rouge_scorer.RougeScorer(["rougeL"], use_stemmer=True)
@@ -188,21 +238,27 @@ def apply_intelligent(action_id: int, prompt: str, task: dict) -> str:
 
 
 def call_llm(prompt: str, fallback: str) -> str:
-    if _OPENAI_CLIENT is None:
+    if not _OPENAI_CLIENTS:
         return fallback
-    try:
-        completion = _OPENAI_CLIENT.chat.completions.create(
-            model=MODEL_NAME,
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=200,
-            temperature=0.1,
-        )
-        text = (completion.choices[0].message.content or "").strip()
-        if text:
-            return text
-    except Exception as exc:
-        _ = exc
-        return fallback
+
+    for attempt in range(LLM_FAILOVER_ATTEMPTS):
+        for provider in _OPENAI_CLIENTS:
+            try:
+                completion = provider["client"].chat.completions.create(
+                    model=provider["model"],
+                    messages=[{"role": "user", "content": prompt}],
+                    max_tokens=200,
+                    temperature=0.1,
+                )
+                text = (completion.choices[0].message.content or "").strip()
+                if text:
+                    return text
+            except Exception:
+                continue
+
+        if attempt + 1 < LLM_FAILOVER_ATTEMPTS and LLM_FAILOVER_BACKOFF_SECONDS > 0:
+            time.sleep(LLM_FAILOVER_BACKOFF_SECONDS * (attempt + 1))
+
     return fallback
 
 

@@ -46,6 +46,7 @@ if not _LLM_ROUTER.has_provider():
     sys.exit(1)
 
 _ROUGE = rouge_scorer.RougeScorer(["rougeL"], use_stemmer=True)
+SCORE_EPSILON = 1e-4
 
 
 def call_llm(prompt: str, max_tokens: int = 300) -> str:
@@ -66,8 +67,10 @@ def call_llm(prompt: str, max_tokens: int = 300) -> str:
 def score_output(output: str, reference: str) -> float:
     """Compute ROUGE-L score."""
     if not output or not reference:
-        return 0.0
-    return round(_ROUGE.score(reference, output)["rougeL"].fmeasure, 4)
+        return SCORE_EPSILON
+    base_score = float(_ROUGE.score(reference, output)["rougeL"].fmeasure)
+    bounded = max(SCORE_EPSILON, min(1.0 - SCORE_EPSILON, base_score))
+    return round(bounded, 4)
 
 
 def intelligent_action_selection(

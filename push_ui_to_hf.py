@@ -1,80 +1,143 @@
 """
-push_ui_to_hf.py
-----------------
-After running `openenv push`, this script pushes our custom Dark UI Dockerfile
-directly to the Hugging Face Space repo, overriding the one openenv injected.
+Push a curated PromptOptEnv Space bundle to Hugging Face.
+
+This keeps the Space repo clean by staging only the files required for the app
+and by deleting remote junk patterns in the same commit. Local files are never
+deleted.
 
 Usage:
     python push_ui_to_hf.py
+    python push_ui_to_hf.py --repo-id your-name/prompt-opt-env
+    python push_ui_to_hf.py --dry-run
 """
+from __future__ import annotations
+
+import argparse
 import os
+import shutil
 import sys
+import tempfile
+from pathlib import Path
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+from huggingface_hub import HfApi
 
-# Load .env.local for HF_TOKEN
-try:
-    from dotenv import load_dotenv
-    env_file = os.path.join(BASE_DIR, ".env.local")
-    if os.path.exists(env_file):
-        load_dotenv(env_file, override=True)
-        print(f"[INFO] Loaded {env_file}")
-except ImportError:
-    pass
-
-from huggingface_hub import HfApi, upload_file
-
-HF_TOKEN = os.getenv("HF_TOKEN") or os.getenv("HUGGINGFACEHUB_API_TOKEN")
-REPO_ID = "shyamyemuka/prompt-opt-env"
+BASE_DIR = Path(__file__).resolve().parent
+ENV_DIR = BASE_DIR / "prompt_opt_env"
+DEFAULT_REPO_ID = "shyamyemuka/prompt-opt-env"
 REPO_TYPE = "space"
 
-if not HF_TOKEN:
-    print("[ERROR] HF_TOKEN not found. Add it to .env.local")
-    sys.exit(1)
+REMOTE_DELETE_PATTERNS = [
+    "*.log",
+    "*.txt",
+    ".pytest_cache",
+    ".pytest_cache/**",
+    "__pycache__",
+    "**/__pycache__",
+    ".venv",
+    ".venv/**",
+    ".uvcache2",
+    ".uvcache2/**",
+    ".uv-cache",
+    ".uv-cache/**",
+]
 
-api = HfApi(token=HF_TOKEN)
+DEPLOY_FILE_MAP = {
+    BASE_DIR / "README.md": "README.md",
+    BASE_DIR / "benchmark.py": "benchmark.py",
+    BASE_DIR / "demo_examples.py": "demo_examples.py",
+    BASE_DIR / "inference.py": "inference.py",
+    BASE_DIR / "optimize.py": "optimize.py",
+    ENV_DIR / ".dockerignore": ".dockerignore",
+    ENV_DIR / "client.py": "client.py",
+    ENV_DIR / "Dockerfile.ui": "Dockerfile",
+    ENV_DIR / "llm_router.py": "llm_router.py",
+    ENV_DIR / "models.py": "models.py",
+    ENV_DIR / "openenv.yaml": "openenv.yaml",
+    ENV_DIR / "pyproject.toml": "pyproject.toml",
+    ENV_DIR / "uv.lock": "uv.lock",
+    ENV_DIR / "web_ui.py": "web_ui.py",
+}
 
-print(f"[INFO] Uploading files to {REPO_ID}...")
+DEPLOY_DIRS = {
+    ENV_DIR / "server": "server",
+    ENV_DIR / "templates": "templates",
+}
 
-# 1. Upload our custom Dockerfile (overrides what openenv injected)
-dockerfile_src = os.path.join(BASE_DIR, "prompt_opt_env", "Dockerfile.ui")
-upload_file(
-    path_or_fileobj=dockerfile_src,
-    path_in_repo="Dockerfile",        # HF reads this as the root Dockerfile
-    repo_id=REPO_ID,
-    repo_type=REPO_TYPE,
-    token=HF_TOKEN,
-    commit_message="Override Dockerfile with Custom Dark UI",
-)
-print("[OK] Dockerfile uploaded")
 
-# 2. Upload web_ui.py (our full UI logic)
-web_ui_src = os.path.join(BASE_DIR, "prompt_opt_env", "web_ui.py")
-upload_file(
-    path_or_fileobj=web_ui_src,
-    path_in_repo="web_ui.py",
-    repo_id=REPO_ID,
-    repo_type=REPO_TYPE,
-    token=HF_TOKEN,
-    commit_message="Upload Custom Dark UI (web_ui.py)",
-)
-print("[OK] web_ui.py uploaded")
+def _load_env_local() -> None:
+    try:
+        from dotenv import load_dotenv
+    except ImportError:
+        return
 
-# 3. Upload the templates folder if it exists
-import glob
-templates_dir = os.path.join(BASE_DIR, "templates")
-if os.path.isdir(templates_dir):
-    for fpath in glob.glob(os.path.join(templates_dir, "*.html")):
-        fname = os.path.basename(fpath)
-        upload_file(
-            path_or_fileobj=fpath,
-            path_in_repo=f"templates/{fname}",
-            repo_id=REPO_ID,
+    env_file = BASE_DIR / ".env.local"
+    if env_file.exists():
+        load_dotenv(env_file, override=True)
+        print(f"[INFO] Loaded {env_file}")
+
+
+def stage_hf_bundle(staging_dir: Path) -> list[str]:
+    staged: list[str] = []
+    staging_dir.mkdir(parents=True, exist_ok=True)
+
+    for source, destination in DEPLOY_FILE_MAP.items():
+        if not source.exists():
+            continue
+        target = staging_dir / destination
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
+        staged.append(destination.replace("\\", "/"))
+
+    for source, destination in DEPLOY_DIRS.items():
+        if not source.exists():
+            continue
+        target = staging_dir / destination
+        shutil.copytree(source, target, dirs_exist_ok=True)
+        staged.append(destination.replace("\\", "/") + "/")
+
+    return sorted(staged)
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--repo-id", default=DEFAULT_REPO_ID)
+    parser.add_argument("--dry-run", action="store_true")
+    return parser.parse_args()
+
+
+def main() -> int:
+    args = parse_args()
+    _load_env_local()
+
+    hf_token = os.getenv("HF_TOKEN") or os.getenv("HUGGINGFACEHUB_API_TOKEN")
+    if not hf_token:
+        print("[ERROR] HF_TOKEN not found. Add it to the environment or .env.local.")
+        return 1
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        staging_dir = Path(tmpdir) / "hf_space"
+        staged = stage_hf_bundle(staging_dir)
+
+        print(f"[INFO] Prepared {len(staged)} deploy entries for {args.repo_id}:")
+        for item in staged:
+            print(f"  - {item}")
+
+        if args.dry_run:
+            print("[INFO] Dry run complete. No remote changes made.")
+            return 0
+
+        api = HfApi(token=hf_token)
+        api.upload_folder(
+            folder_path=str(staging_dir),
+            repo_id=args.repo_id,
             repo_type=REPO_TYPE,
-            token=HF_TOKEN,
-            commit_message=f"Upload template: {fname}",
+            delete_patterns=REMOTE_DELETE_PATTERNS,
+            commit_message="Sync PromptOptEnv Space bundle",
         )
-        print(f"[OK] templates/{fname} uploaded")
 
-print(f"\n[DONE] All files pushed. Hugging Face will rebuild the Space now.")
-print(f"       Visit: https://huggingface.co/spaces/{REPO_ID}")
+    print(f"[DONE] Space synced: https://huggingface.co/spaces/{args.repo_id}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

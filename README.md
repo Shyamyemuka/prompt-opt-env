@@ -32,12 +32,14 @@ PromptOptEnv supports two modes for actions:
 **Standard Mode (default)**: Simple string manipulation - appending context, regex-based shortening, etc.
 
 **Intelligent Mode**: Each action calls the LLM to intelligently rewrite the prompt:
+
 - `ADD_CONTEXT_LLM`: LLM naturally weaves context into the prompt (not just appending)
 - `SHORTEN_LLM`: LLM intelligently compresses while preserving meaning
 - `REPHRASE_LLM`: LLM rewrites for clarity and directness
 - `REWRITE_FULL`: Complete LLM-powered rewrite considering all task context
 
 Enable intelligent mode:
+
 ```bash
 export USE_INTELLIGENT_ACTIONS=true
 uv run server
@@ -82,12 +84,12 @@ PromptOptEnv demonstrates that cost-aware strategies significantly outperform na
 
 We compared four strategies across 9 episodes (3 episodes × 3 tasks: easy/medium/hard):
 
-| Strategy | Efficiency | Avg Score | Avg Tokens | Avg Reward | Budget Compliance | Key Insight |
-|----------|-----------|-----------|------------|-----------|-------------------|-------------|
-| **Heuristic** | **0.0085** | 0.72 | 42.3 | +0.85 | 92% | Uses STOP intelligently; stops when quality/cost ratio is optimal |
-| Random | 0.0062 | 0.61 | 58.7 | +0.23 | 54% | Wastes tokens on suboptimal actions |
-| Immediate STOP | 0.0071 | 0.64 | 35.0 | +0.96 | 100% | Baseline: no optimization attempted |
-| Always Improve | 0.0048 | 0.69 | 67.2 | -0.45 | 31% | Ignores budget; frequently exceeds token limits |
+| Strategy       | Efficiency | Avg Score | Avg Tokens | Avg Reward | Budget Compliance | Key Insight                                                       |
+| -------------- | ---------- | --------- | ---------- | ---------- | ----------------- | ----------------------------------------------------------------- |
+| **Heuristic**  | **0.0085** | 0.72      | 42.3       | +0.85      | 92%               | Uses STOP intelligently; stops when quality/cost ratio is optimal |
+| Random         | 0.0062     | 0.61      | 58.7       | +0.23      | 54%               | Wastes tokens on suboptimal actions                               |
+| Immediate STOP | 0.0071     | 0.64      | 35.0       | +0.96      | 100%              | Baseline: no optimization attempted                               |
+| Always Improve | 0.0048     | 0.69      | 67.2       | -0.45      | 31%               | Ignores budget; frequently exceeds token limits                   |
 
 **Key Findings:**
 
@@ -102,7 +104,7 @@ Run the benchmark yourself:
 python benchmark.py
 ```
 
-*Note: Results require `HF_TOKEN` or `OPENAI_API_KEY` for live LLM evaluation. Without API keys, the benchmark uses deterministic fallback outputs.*
+_Note: Results require `HF_TOKEN` or `OPENAI_API_KEY` for live LLM evaluation. Without API keys, the benchmark uses deterministic fallback outputs._
 
 ## Installation & Setup
 
@@ -147,6 +149,33 @@ python inference.py
 ```
 
 This executes the core cost-aware inference loop and prints only the required structured `[START]`, `[STEP]`, and `[END]` lines for each episode.
+
+## What makes this project unique
+
+PromptOptEnv demonstrates a production-relevant behavior that pure quality optimizers miss: it learns when an edit is not worth the token cost.
+
+- Cost-aware reward prevents prompt bloat from being treated as free quality.
+- STOP action creates explicit efficiency decisions instead of fixed-length editing.
+- Hard token budgets enforce realistic serving constraints (easy: 80, medium: 65, hard: 55).
+- Required inference logs are machine-checker friendly and deterministic in shape.
+
+## Runtime Reliability
+
+The baseline path is intentionally resilient for hackathon evaluation:
+
+- Multi-provider OpenAI-client failover: OpenAI key path and HF OpenAI-compatible path are both supported.
+- Bounded retries and timeout controls via env vars keep runs finite.
+- Safe deterministic fallback outputs are used if providers fail, preventing total run collapse.
+- `inference.py` always emits structured episode logs and exits cleanly.
+
+Key runtime knobs:
+
+```env
+LLM_TIMEOUT_SECONDS=8
+LLM_MAX_RETRIES=2
+LLM_FAILOVER_ATTEMPTS=2
+LLM_FAILOVER_BACKOFF_SECONDS=0.25
+```
 
 ## Usage Guide
 

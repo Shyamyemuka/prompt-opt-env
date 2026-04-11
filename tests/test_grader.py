@@ -56,3 +56,9 @@ def test_compute_rouge_empty_inputs():
     assert grader._compute_rouge("", "reference") == SCORE_EPSILON
     assert grader._compute_rouge("hypothesis", "") == SCORE_EPSILON
     assert grader._compute_rouge("", "") == SCORE_EPSILON
+
+
+def test_compute_rouge_exact_match_stays_below_one():
+    grader = Grader()
+    score = grader._compute_rouge("identical answer", "identical answer")
+    assert 0.0 < score < 1.0

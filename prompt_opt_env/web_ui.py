@@ -97,7 +97,7 @@ API_BASE_URL_FALLBACK: str = _normalize_base_url(
     _first_env("API_BASE_URL_FALLBACK", "OPENAI_BASE_URL_FALLBACK", default="")
 )
 MODEL_NAME: str = _first_env("MODEL_NAME", "OPENAI_MODEL", default="Qwen/Qwen2.5-72B-Instruct")
-HF_TOKEN: str = _first_env("HF_TOKEN", "OPENAI_API_KEY", "HUGGINGFACEHUB_API_TOKEN", default="")
+HF_TOKEN: str = _first_env("HF_TOKEN", "HUGGINGFACEHUB_API_TOKEN", default="")
 ALPHA: float = float(os.getenv("TOKEN_PENALTY_ALPHA", "0.02"))
 DONE_THRESHOLD: float = float(os.getenv("DONE_THRESHOLD", "0.85"))
 MAX_STEPS: int = int(os.getenv("MAX_STEPS", "7"))
@@ -125,6 +125,7 @@ _ACTIVE_API_BASE_URL: str = _API_BASE_URL_CANDIDATES[0] if _API_BASE_URL_CANDIDA
 _LAST_LLM_ERROR = ""
 _LAST_LLM_FINISH_REASON = ""
 _ROUGE = rouge_scorer.RougeScorer(["rougeL"], use_stemmer=True)
+SCORE_EPSILON = 1e-4
 _LLM_ROUTER = create_default_router(
     default_model=MODEL_NAME,
     default_base_url=API_BASE_URL,
@@ -220,7 +221,7 @@ def score_output(output: str, reference: str, task: str = "General") -> float:
         or output.startswith("[Error:")
         or reference.startswith("[Error:")
     ):
-        return 0.0
+        return SCORE_EPSILON
     base_score = _ROUGE.score(reference, output)["rougeL"].fmeasure
 
     # Summaries should be concise; penalize overly long outputs against compact references.
@@ -231,7 +232,8 @@ def score_output(output: str, reference: str, task: str = "General") -> float:
             brevity_factor = max(0.55, min(1.0, (ref_len / out_len) * 1.25))
             base_score *= brevity_factor
 
-    return round(base_score, 4)
+    bounded = max(SCORE_EPSILON, min(1.0 - SCORE_EPSILON, float(base_score)))
+    return round(bounded, 4)
 
 
 def clip_reward(value: float, lower: float = -2.0, upper: float = 2.0) -> float:

@@ -13,6 +13,10 @@ from dataclasses import dataclass
 
 from openai import OpenAI
 
+OPENAI_DEFAULT_BASE_URL = "https://api.openai.com/v1/"
+GEMINI_DEFAULT_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
+HF_DEFAULT_BASE_URL = "https://router.huggingface.co/v1/"
+
 
 @dataclass(frozen=True)
 class ProviderSpec:
@@ -47,7 +51,7 @@ def build_provider_specs(default_model: str, default_base_url: str = "") -> list
             ProviderSpec(
                 name="openai",
                 base_url=_normalize_base_url(
-                    os.getenv("OPENAI_BASE_URL", default_base_url or "https://api.openai.com/v1/")
+                    os.getenv("OPENAI_BASE_URL", OPENAI_DEFAULT_BASE_URL)
                 ),
                 api_key=openai_key,
                 model=(os.getenv("OPENAI_MODEL") or default_model).strip() or default_model,
@@ -61,7 +65,7 @@ def build_provider_specs(default_model: str, default_base_url: str = "") -> list
             ProviderSpec(
                 name="gemini",
                 base_url=_normalize_base_url(
-                    os.getenv("GEMINI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai/")
+                    os.getenv("GEMINI_BASE_URL", GEMINI_DEFAULT_BASE_URL)
                 ),
                 api_key=gemini_key,
                 model=(os.getenv("GEMINI_MODEL") or default_model).strip() or default_model,
@@ -75,7 +79,10 @@ def build_provider_specs(default_model: str, default_base_url: str = "") -> list
             ProviderSpec(
                 name="hf",
                 base_url=_normalize_base_url(
-                    os.getenv("HF_BASE_URL", os.getenv("API_BASE_URL", default_base_url or "https://router.huggingface.co/v1/"))
+                    os.getenv(
+                        "HF_BASE_URL",
+                        os.getenv("API_BASE_URL", default_base_url or HF_DEFAULT_BASE_URL),
+                    )
                 ),
                 api_key=hf_key,
                 model=(os.getenv("HF_MODEL") or default_model).strip() or default_model,
@@ -175,7 +182,7 @@ class LLMRouter:
                     continue
 
                 with self._lock:
-                    self._next_index = (idx + 1) % total
+                    self._next_index = idx
                 self.last_error = ""
                 self.last_provider = provider.name
                 self.last_finish_reason = (response.choices[0].finish_reason or "").strip()

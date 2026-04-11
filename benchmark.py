@@ -14,6 +14,7 @@ import os
 import random
 import sys
 import traceback
+from importlib import import_module
 from typing import Callable
 from types import SimpleNamespace
 
@@ -40,15 +41,21 @@ TOKEN_PENALTY_ALPHA = float(os.getenv("TOKEN_PENALTY_ALPHA", "0.02"))
 USE_INTELLIGENT = os.getenv("USE_INTELLIGENT", "false").lower() == "true"
 USE_INTELLIGENT_ACTIONS = os.getenv("USE_INTELLIGENT_ACTIONS", "true").lower() == "true" or USE_INTELLIGENT
 
+def _load_actions_llm():
+    for module_name in ("prompt_opt_env.server.actions_llm", "server.actions_llm"):
+        try:
+            module = import_module(module_name)
+            return module.apply_action_intelligent, module.get_action_llm_stats
+        except Exception:
+            continue
+    raise ModuleNotFoundError("Unable to import actions_llm from known module paths")
+
+
 try:
-    from prompt_opt_env.server.actions_llm import apply_action_intelligent, get_action_llm_stats
+    apply_action_intelligent, get_action_llm_stats = _load_actions_llm()
     _INTELLIGENT_ACTIONS_AVAILABLE = True
 except Exception:
-    try:
-        from server.actions_llm import apply_action_intelligent, get_action_llm_stats
-        _INTELLIGENT_ACTIONS_AVAILABLE = True
-    except Exception:
-        _INTELLIGENT_ACTIONS_AVAILABLE = False
+    _INTELLIGENT_ACTIONS_AVAILABLE = False
 
 _LLM_ROUTER = create_default_router(
     default_model=MODEL_NAME,

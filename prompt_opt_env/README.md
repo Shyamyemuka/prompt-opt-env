@@ -6,6 +6,7 @@ colorTo: indigo
 sdk: docker
 pinned: false
 ---
+
 # PromptOptEnv: Cost-Aware Task-Adaptive Prompt Optimization via RL
 
 A Reinforcement Learning environment where an agent learns to improve prompts while staying within a token budget — maximising output quality **per token spent**, not just raw quality.
@@ -20,7 +21,7 @@ Every existing prompt optimisation tool — DSPy, TextGrad, OPRO — maximises o
 
 In production, this fails. **Prompt tokens cost money at inference time.** Meta serves billions of LLaMA queries daily — a 10% reduction in average prompt length at that scale saves millions in compute costs. Every enterprise LLM deployment has a cost budget.
 
-PromptOptEnv frames this as **constrained RL**: the agent must learn *which prompt improvements are worth their token cost* and *when to stop adding tokens*. The reward signal explicitly balances two competing objectives:
+PromptOptEnv frames this as **constrained RL**: the agent must learn _which prompt improvements are worth their token cost_ and _when to stop adding tokens_. The reward signal explicitly balances two competing objectives:
 
 ```
 reward = quality_improvement - alpha * token_overhead
@@ -65,14 +66,14 @@ async with PromptOptEnvEnv(base_url="wss://{username}-prompt-opt-env.hf.space") 
 
 6 actions. The key innovation: each action has a different token cost profile that the agent must learn to balance against its quality benefit.
 
-| ID | Name | Quality Effect | Token Effect | Description |
-|---|---|---|---|---|
-| 0 | `ADD_CONTEXT` | +medium | +10–15 tokens | Appends domain context sentence |
-| 1 | `SHORTEN` | −small or neutral | −5–12 tokens | Removes filler phrases via regex — the only token-reducing action |
-| 2 | `ADD_EXAMPLE` | +medium-high | +12–20 tokens | Appends example output format |
-| 3 | `REPHRASE` | +small | ±0 tokens | Converts questions to direct imperatives — free quality improvement |
-| 4 | `ADD_CONSTRAINT` | +small-medium | +8–12 tokens | Appends output constraint |
-| 5 | `STOP` | — | 0 tokens | Voluntarily end episode. Reward = current_score × 1.5 |
+| ID  | Name             | Quality Effect    | Token Effect  | Description                                                         |
+| --- | ---------------- | ----------------- | ------------- | ------------------------------------------------------------------- |
+| 0   | `ADD_CONTEXT`    | +medium           | +10–15 tokens | Appends domain context sentence                                     |
+| 1   | `SHORTEN`        | −small or neutral | −5–12 tokens  | Removes filler phrases via regex — the only token-reducing action   |
+| 2   | `ADD_EXAMPLE`    | +medium-high      | +12–20 tokens | Appends example output format                                       |
+| 3   | `REPHRASE`       | +small            | ±0 tokens     | Converts questions to direct imperatives — free quality improvement |
+| 4   | `ADD_CONSTRAINT` | +small-medium     | +8–12 tokens  | Appends output constraint                                           |
+| 5   | `STOP`           | —                 | 0 tokens      | Voluntarily end episode. Reward = current_score × 1.5               |
 
 The STOP action is the core differentiator: it forces the agent to learn when it has done enough, rather than always adding more context until steps run out.
 
@@ -82,23 +83,23 @@ The STOP action is the core differentiator: it forces the agent to learn when it
 
 Every `reset()` and `step()` returns a `PromptObservation`. All fields always present.
 
-| Field | Type | Description |
-|---|---|---|
-| `task_description` | `str` | What the prompt should accomplish |
-| `current_prompt` | `str` | Prompt after this step |
-| `previous_prompt` | `str` | Prompt before this step |
-| `current_score` | `float` (0,1) | ROUGE-L F1 of current prompt output |
-| `previous_score` | `float` (0,1) | ROUGE-L F1 before this step |
-| `current_token_count` | `int` | Word-level token count of current prompt |
-| `previous_token_count` | `int` | Token count before this step |
-| `token_budget` | `int` | Hard ceiling for this task (easy=80, medium=65, hard=55) |
-| `tokens_remaining` | `int` | token_budget − current_token_count |
-| `token_overhead` | `int` | Tokens added this step (negative if SHORTEN applied) |
-| `reward` | `float` | Combined reward, clipped to [−2.0, +2.0] |
-| `done` | `bool` | True if episode ended |
-| `step_count` | `int` | Steps taken this episode |
-| `reference_answer` | `str` | Gold-standard answer for grader |
-| `info` | `dict` | grader_used, action_applied, stuck_count, termination_reason, llm_output_preview, no_op |
+| Field                  | Type          | Description                                                                             |
+| ---------------------- | ------------- | --------------------------------------------------------------------------------------- |
+| `task_description`     | `str`         | What the prompt should accomplish                                                       |
+| `current_prompt`       | `str`         | Prompt after this step                                                                  |
+| `previous_prompt`      | `str`         | Prompt before this step                                                                 |
+| `current_score`        | `float` (0,1) | ROUGE-L F1 of current prompt output                                                     |
+| `previous_score`       | `float` (0,1) | ROUGE-L F1 before this step                                                             |
+| `current_token_count`  | `int`         | Word-level token count of current prompt                                                |
+| `previous_token_count` | `int`         | Token count before this step                                                            |
+| `token_budget`         | `int`         | Hard ceiling for this task (easy=80, medium=65, hard=55)                                |
+| `tokens_remaining`     | `int`         | token_budget − current_token_count                                                      |
+| `token_overhead`       | `int`         | Tokens added this step (negative if SHORTEN applied)                                    |
+| `reward`               | `float`       | Combined reward, clipped to [−2.0, +2.0]                                                |
+| `done`                 | `bool`        | True if episode ended                                                                   |
+| `step_count`           | `int`         | Steps taken this episode                                                                |
+| `reference_answer`     | `str`         | Gold-standard answer for grader                                                         |
+| `info`                 | `dict`        | grader_used, action_applied, stuck_count, termination_reason, llm_output_preview, no_op |
 
 ---
 
@@ -157,11 +158,11 @@ Token efficiency: 0.75 quality at 22 tokens (vs budget of 80)
 
 Each task has a hard token ceiling. If any action would cause the prompt to exceed the budget, that action is rejected, the prompt reverts, and the episode ends with a penalty (−0.5). This teaches the agent to plan token usage across the full episode, not just locally.
 
-| Difficulty | Token Budget | Why |
-|---|---|---|
-| Easy | 80 | More slack — agent explores freely |
-| Medium | 65 | Meaningful constraint — must choose actions wisely |
-| Hard | 55 | Tight — requires efficient language from the start |
+| Difficulty | Token Budget | Why                                                |
+| ---------- | ------------ | -------------------------------------------------- |
+| Easy       | 80           | More slack — agent explores freely                 |
+| Medium     | 65           | Meaningful constraint — must choose actions wisely |
+| Hard       | 55           | Tight — requires efficient language from the start |
 
 ---
 
@@ -169,49 +170,49 @@ Each task has a hard token ceiling. If any action would cause the prompt to exce
 
 15 tasks across 4 categories with explicit difficulty and token budget per task.
 
-| ID | Category | Description | Difficulty | Budget |
-|---|---|---|---|---|
-| 0 | Summarisation | Climate change article → 3 bullets | Easy | 80 |
-| 1 | Summarisation | Romeo and Juliet → 2 sentences | Easy | 80 |
-| 2 | Summarisation | Crypto risks → under 60 words | Medium | 65 |
-| 3 | Summarisation | French Revolution → chronological bullets | Medium | 65 |
-| 4 | Summarisation | Machine learning → explain to 10-year-old | Easy | 80 |
-| 5 | QA | Binary search time complexity and why? | Medium | 65 |
-| 6 | QA | What causes inflation, how does central bank control it? | Medium | 65 |
-| 7 | QA | Difference between RAM and ROM? | Easy | 80 |
-| 8 | QA | Why blue sky by day, red at sunset? | Easy | 80 |
-| 9 | Instruction | Steps to make a cup of tea | Easy | 80 |
-| 10 | Instruction | Set up Python venv on Windows | Medium | 65 |
-| 11 | Instruction | Resolve a Git merge conflict | Hard | 55 |
-| 12 | Code | Python list comprehension with example | Medium | 65 |
-| 13 | Code | Big O notation with code example | Medium | 65 |
-| 14 | Code | What is recursion with Python example | Easy | 80 |
+| ID  | Category      | Description                                              | Difficulty | Budget |
+| --- | ------------- | -------------------------------------------------------- | ---------- | ------ |
+| 0   | Summarisation | Climate change article → 3 bullets                       | Easy       | 80     |
+| 1   | Summarisation | Romeo and Juliet → 2 sentences                           | Easy       | 80     |
+| 2   | Summarisation | Crypto risks → under 60 words                            | Medium     | 65     |
+| 3   | Summarisation | French Revolution → chronological bullets                | Medium     | 65     |
+| 4   | Summarisation | Machine learning → explain to 10-year-old                | Easy       | 80     |
+| 5   | QA            | Binary search time complexity and why?                   | Medium     | 65     |
+| 6   | QA            | What causes inflation, how does central bank control it? | Medium     | 65     |
+| 7   | QA            | Difference between RAM and ROM?                          | Easy       | 80     |
+| 8   | QA            | Why blue sky by day, red at sunset?                      | Easy       | 80     |
+| 9   | Instruction   | Steps to make a cup of tea                               | Easy       | 80     |
+| 10  | Instruction   | Set up Python venv on Windows                            | Medium     | 65     |
+| 11  | Instruction   | Resolve a Git merge conflict                             | Hard       | 55     |
+| 12  | Code          | Python list comprehension with example                   | Medium     | 65     |
+| 13  | Code          | Big O notation with code example                         | Medium     | 65     |
+| 14  | Code          | What is recursion with Python example                    | Easy       | 80     |
 
 ---
 
 ## Configuration
 
-| Variable | Required | Default | Description |
-|---|---|---|---|
-| `API_BASE_URL` | **Yes** | — | OpenAI-compatible endpoint. HF: `https://router.huggingface.co/v1/` |
-| `MODEL_NAME` | **Yes** | — | E.g. `Qwen/Qwen2.5-72B-Instruct` |
-| `OPENAI_API_KEY` | No | — | Preferred API key for OpenAI-compatible endpoints |
-| `OPENAI_BASE_URL` | No | `https://api.openai.com/v1/` | OpenAI provider endpoint for multi-provider routing |
-| `OPENAI_MODEL` | No | `gpt-4o-mini` | Model to use when OpenAI provider is selected |
-| `GEMINI_API_KEY` | No | — | Gemini API key (used via OpenAI-compatible endpoint) |
-| `GEMINI_BASE_URL` | No | `https://generativelanguage.googleapis.com/v1beta/openai/` | Gemini provider endpoint |
-| `GEMINI_MODEL` | No | `gemini-2.5-flash` | Model to use when Gemini provider is selected |
-| `HF_TOKEN` | No | — | HuggingFace token fallback if `OPENAI_API_KEY` is unset |
-| `MAX_STEPS` | No | `7` | Max steps per episode |
-| `DONE_THRESHOLD` | No | `0.85` | ROUGE-L for success bonus |
-| `TOKEN_PENALTY_ALPHA` | No | `0.02` | Cost penalty alpha in reward formula |
-| `USE_INTELLIGENT_ACTIONS` | No | `true` | Enable LLM-powered prompt rewrites for actions 0-4 |
-| `ACTION_LLM_TIMEOUT_SECONDS` | No | `30` | Timeout for each intelligent action rewrite call |
-| `ACTION_LLM_TEMPERATURE` | No | `0.2` | Sampling temperature for intelligent rewrites |
-| `ACTION_LLM_MAX_CALLS` | No | `250` | Safety cap for total action rewrite calls per process |
-| `ACTION_LLM_DRY_RUN` | No | `false` | Disable action rewrite API calls and always use deterministic fallback |
-| `GRADER` | No | `rouge` | `rouge` (no API) or `openai_client` |
-| `TASK_SEED` | No | random | Fix task (0–14) for reproducibility |
+| Variable                     | Required | Default                                                    | Description                                                            |
+| ---------------------------- | -------- | ---------------------------------------------------------- | ---------------------------------------------------------------------- |
+| `API_BASE_URL`               | **Yes**  | —                                                          | OpenAI-compatible endpoint. HF: `https://router.huggingface.co/v1/`    |
+| `MODEL_NAME`                 | **Yes**  | —                                                          | E.g. `Qwen/Qwen2.5-72B-Instruct`                                       |
+| `OPENAI_API_KEY`             | No       | —                                                          | Preferred API key for OpenAI-compatible endpoints                      |
+| `OPENAI_BASE_URL`            | No       | `https://api.openai.com/v1/`                               | OpenAI provider endpoint for multi-provider routing                    |
+| `OPENAI_MODEL`               | No       | `gpt-4o-mini`                                              | Model to use when OpenAI provider is selected                          |
+| `GEMINI_API_KEY`             | No       | —                                                          | Gemini API key (used via OpenAI-compatible endpoint)                   |
+| `GEMINI_BASE_URL`            | No       | `https://generativelanguage.googleapis.com/v1beta/openai/` | Gemini provider endpoint                                               |
+| `GEMINI_MODEL`               | No       | `gemini-2.5-flash`                                         | Model to use when Gemini provider is selected                          |
+| `HF_TOKEN`                   | **Yes**  | —                                                          | Mandatory token used for checker-compliant inference and HF routing    |
+| `MAX_STEPS`                  | No       | `7`                                                        | Max steps per episode                                                  |
+| `DONE_THRESHOLD`             | No       | `0.85`                                                     | ROUGE-L for success bonus                                              |
+| `TOKEN_PENALTY_ALPHA`        | No       | `0.02`                                                     | Cost penalty alpha in reward formula                                   |
+| `USE_INTELLIGENT_ACTIONS`    | No       | `true`                                                     | Enable LLM-powered prompt rewrites for actions 0-4                     |
+| `ACTION_LLM_TIMEOUT_SECONDS` | No       | `30`                                                       | Timeout for each intelligent action rewrite call                       |
+| `ACTION_LLM_TEMPERATURE`     | No       | `0.2`                                                      | Sampling temperature for intelligent rewrites                          |
+| `ACTION_LLM_MAX_CALLS`       | No       | `250`                                                      | Safety cap for total action rewrite calls per process                  |
+| `ACTION_LLM_DRY_RUN`         | No       | `false`                                                    | Disable action rewrite API calls and always use deterministic fallback |
+| `GRADER`                     | No       | `rouge`                                                    | `rouge` (no API) or `openai_client`                                    |
+| `TASK_SEED`                  | No       | random                                                     | Fix task (0–14) for reproducibility                                    |
 
 ---
 
@@ -220,14 +221,14 @@ Each task has a hard token ceiling. If any action would cause the prompt to exce
 From running `python inference.py` with a random agent (7 steps max, with STOP).
 Efficiency = final_score / final_token_count (higher = better quality per token).
 
-| Difficulty | Score | Tokens | Budget | Efficiency | Reward | Steps |
-|---|---|---|---|---|---|---|
-| Easy | 0.4800 | 22 | 80 | 0.0218 | 0.6300 | 5 |
-| Medium | 0.3500 | 35 | 65 | 0.0100 | 0.3100 | 6 |
-| Hard | 0.2400 | 28 | 55 | 0.0073 | 0.2200 | 7 |
-| **Average** | **0.3567** | | | | | |
+| Difficulty  | Score      | Tokens | Budget | Efficiency | Reward | Steps |
+| ----------- | ---------- | ------ | ------ | ---------- | ------ | ----- |
+| Easy        | 0.4800     | 22     | 80     | 0.0218     | 0.6300 | 5     |
+| Medium      | 0.3500     | 35     | 65     | 0.0100     | 0.3100 | 6     |
+| Hard        | 0.2400     | 28     | 55     | 0.0073     | 0.2200 | 7     |
+| **Average** | **0.3567** |        |        |            |        |       |
 
-*Run `python inference.py` to get your exact reproducible scores.*
+_Run `python inference.py` to get your exact reproducible scores._
 
 ---
 

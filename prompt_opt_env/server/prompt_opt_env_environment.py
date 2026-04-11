@@ -6,6 +6,7 @@ STOP action (action_id=5) lets agent voluntarily end with quality bonus.
 """
 import os
 import random
+from importlib import import_module
 from uuid import uuid4
 
 from openenv.core.env_server.interfaces import Environment
@@ -28,7 +29,9 @@ except (ModuleNotFoundError, ImportError):
     from server.grader import Grader, SCORE_EPSILON
     from server.task_bank import TASK_BANK, Task
     try:
-        from server.actions_llm import apply_action_intelligent, ACTION_NAMES_INTELLIGENT
+        actions_llm = import_module("server.actions_llm")
+        apply_action_intelligent = actions_llm.apply_action_intelligent
+        ACTION_NAMES_INTELLIGENT = actions_llm.ACTION_NAMES_INTELLIGENT
         _INTELLIGENT_ACTIONS_AVAILABLE = True
     except Exception:
         ACTION_NAMES_INTELLIGENT = {}
