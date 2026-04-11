@@ -39,6 +39,10 @@ REMOTE_DELETE_PATTERNS = [
     ".uvcache2/**",
     ".uv-cache",
     ".uv-cache/**",
+    # Clean stale mirrored package tree from older deployment mode.
+    # If this lingers, evaluators may import outdated grader paths.
+    "prompt_opt_env",
+    "prompt_opt_env/**",
 ]
 
 DEPLOY_FILE_MAP = {
