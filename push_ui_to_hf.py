@@ -18,6 +18,7 @@ import shutil
 import sys
 import tempfile
 from pathlib import Path
+from typing import Iterable
 
 from huggingface_hub import HfApi
 
@@ -25,6 +26,7 @@ BASE_DIR = Path(__file__).resolve().parent
 ENV_DIR = BASE_DIR / "prompt_opt_env"
 DEFAULT_REPO_ID = "shyamyemuka/prompt-opt-env"
 REPO_TYPE = "space"
+HF_MANAGED_FILES = {".gitattributes"}
 
 REMOTE_DELETE_PATTERNS = [
     "*.log",
@@ -110,6 +112,42 @@ def stage_hf_bundle(staging_dir: Path) -> list[str]:
     return sorted(staged)
 
 
+def _normalize_remote_path(path: str) -> str:
+    return path.replace("\\", "/").strip("/")
+
+
+def _allowed_remote_paths(staged: Iterable[str]) -> tuple[set[str], set[str]]:
+    allowed_files: set[str] = set(HF_MANAGED_FILES)
+    allowed_dirs: set[str] = set()
+
+    for entry in staged:
+        normalized = _normalize_remote_path(entry)
+        if not normalized:
+            continue
+        if entry.endswith("/"):
+            allowed_dirs.add(normalized)
+        else:
+            allowed_files.add(normalized)
+
+    return allowed_files, allowed_dirs
+
+
+def _build_stale_remote_delete_patterns(api: HfApi, repo_id: str, staged: Iterable[str]) -> list[str]:
+    allowed_files, allowed_dirs = _allowed_remote_paths(staged)
+    remote_files = api.list_repo_files(repo_id=repo_id, repo_type=REPO_TYPE)
+    stale_files: list[str] = []
+
+    for raw_path in remote_files:
+        normalized = _normalize_remote_path(raw_path)
+        if normalized in allowed_files:
+            continue
+        if any(normalized == directory or normalized.startswith(f"{directory}/") for directory in allowed_dirs):
+            continue
+        stale_files.append(normalized)
+
+    return sorted(set(stale_files))
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--repo-id", default=DEFAULT_REPO_ID)
@@ -139,11 +177,16 @@ def main() -> int:
             return 0
 
         api = HfApi(token=hf_token)
+        stale_delete_patterns = _build_stale_remote_delete_patterns(api, args.repo_id, staged)
+        if stale_delete_patterns:
+            print(f"[INFO] Removing {len(stale_delete_patterns)} stale remote paths:")
+            for item in stale_delete_patterns:
+                print(f"  - delete {item}")
         api.upload_folder(
             folder_path=str(staging_dir),
             repo_id=args.repo_id,
             repo_type=REPO_TYPE,
-            delete_patterns=REMOTE_DELETE_PATTERNS,
+            delete_patterns=sorted(set(REMOTE_DELETE_PATTERNS + stale_delete_patterns)),
             commit_message="Sync PromptOptEnv Space bundle",
         )
 
