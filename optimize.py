@@ -46,7 +46,7 @@ if not _LLM_ROUTER.has_provider():
     sys.exit(1)
 
 _ROUGE = rouge_scorer.RougeScorer(["rougeL"], use_stemmer=True)
-SCORE_EPSILON = 1e-4
+SCORE_EPSILON = 0.05
 
 
 def call_llm(prompt: str, max_tokens: int = 300) -> str:

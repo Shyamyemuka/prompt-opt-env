@@ -65,7 +65,7 @@ _LLM_ROUTER = create_default_router(
 )
 
 _ROUGE = rouge_scorer.RougeScorer(["rougeL"], use_stemmer=True)
-SCORE_EPSILON = 1e-4
+SCORE_EPSILON = 0.05
 
 # Test tasks (same as inference.py)
 EVAL_TASKS = [
