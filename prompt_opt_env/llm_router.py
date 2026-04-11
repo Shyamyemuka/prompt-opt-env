@@ -33,6 +33,16 @@ def _normalize_base_url(url: str) -> str:
     return clean
 
 
+def _looks_provider_specific_model(model_name: str) -> bool:
+    """Detect model IDs that are unlikely to be valid on native OpenAI endpoints."""
+    model = (model_name or "").strip().lower()
+    if not model:
+        return False
+    if "/" in model:
+        return True
+    return model.startswith("gemini")
+
+
 def build_provider_specs(default_model: str, default_base_url: str = "") -> list[ProviderSpec]:
     """
     Build provider list from environment.
@@ -47,14 +57,24 @@ def build_provider_specs(default_model: str, default_base_url: str = "") -> list
     # OpenAI
     openai_key = (os.getenv("OPENAI_API_KEY") or "").strip()
     if openai_key:
+        openai_base_url = _normalize_base_url(
+            os.getenv("OPENAI_BASE_URL", OPENAI_DEFAULT_BASE_URL)
+        )
+        explicit_openai_model = (os.getenv("OPENAI_MODEL") or "").strip()
+        if explicit_openai_model:
+            openai_model = explicit_openai_model
+        elif "api.openai.com" in openai_base_url and _looks_provider_specific_model(default_model):
+            # Avoid sending HF/Gemini model IDs to native OpenAI, which returns invalid model ID.
+            openai_model = "gpt-4o-mini"
+        else:
+            openai_model = default_model
+
         providers.append(
             ProviderSpec(
                 name="openai",
-                base_url=_normalize_base_url(
-                    os.getenv("OPENAI_BASE_URL", OPENAI_DEFAULT_BASE_URL)
-                ),
+                base_url=openai_base_url,
                 api_key=openai_key,
-                model=(os.getenv("OPENAI_MODEL") or default_model).strip() or default_model,
+                model=(openai_model or "gpt-4o-mini").strip(),
             )
         )
 
