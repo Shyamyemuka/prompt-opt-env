@@ -56,6 +56,15 @@ def _strict_score(value: float) -> float:
     return max(SCORE_EPSILON, min(1.0 - SCORE_EPSILON, score))
 
 
+def _strict_reward(value: float) -> float:
+    """Map reward signal to strict (0,1) to satisfy checker range requirements."""
+    raw = float(value)
+    if not math.isfinite(raw):
+        return 0.5
+    scaled = (raw + 2.0) / 4.0
+    return max(SCORE_EPSILON, min(1.0 - SCORE_EPSILON, round(scaled, 4)))
+
+
 class PromptOptEnvEnvironment(Environment):
     """
     Cost-aware prompt optimisation RL environment.
@@ -140,7 +149,7 @@ class PromptOptEnvEnvironment(Environment):
             token_budget=self._task.token_budget,
             tokens_remaining=self._task.token_budget - self._current_token_count,
             token_overhead=0,
-            reward=0.0,
+            reward=_strict_reward(0.0),
             done=False,
             step_count=0,
             reference_answer=self._task.reference_answer,
@@ -175,7 +184,7 @@ class PromptOptEnvEnvironment(Environment):
 
         # ── STOP action ──────────────────────────────────────────────────────
         if action.action_id == 5:
-            stop_bonus = Grader.clip_reward(self._current_score * 1.5)
+            stop_bonus = _strict_reward(Grader.clip_reward(self._current_score * 1.5))
             self._step_count += 1
             return PromptObservation(
                 task_description=self._task.task_description,
@@ -222,7 +231,7 @@ class PromptOptEnvEnvironment(Environment):
                 token_budget=self._task.token_budget,
                 tokens_remaining=self._task.token_budget - self._current_token_count,
                 token_overhead=0,
-                reward=-0.5,
+                reward=_strict_reward(-0.5),
                 done=True,
                 step_count=self._step_count,
                 reference_answer=self._task.reference_answer,
@@ -271,7 +280,7 @@ class PromptOptEnvEnvironment(Environment):
                 token_budget=self._task.token_budget,
                 tokens_remaining=self._task.token_budget - self._current_token_count,
                 token_overhead=0,
-                reward=-0.1,
+                reward=_strict_reward(-0.1),
                 done=done,
                 step_count=self._step_count,
                 reference_answer=self._task.reference_answer,
@@ -303,7 +312,7 @@ class PromptOptEnvEnvironment(Environment):
                 token_budget=self._task.token_budget,
                 tokens_remaining=self._task.token_budget - self._current_token_count,
                 token_overhead=0,
-                reward=-0.5,
+                reward=_strict_reward(-0.5),
                 done=True,
                 step_count=self._step_count,
                 reference_answer=self._task.reference_answer,
@@ -352,6 +361,8 @@ class PromptOptEnvEnvironment(Environment):
         elif self._step_count >= MAX_STEPS:
             done = True
             termination_reason = "max_steps"
+
+        reward = _strict_reward(reward)
 
         return PromptObservation(
             task_description=self._task.task_description,

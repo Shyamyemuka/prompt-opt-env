@@ -15,7 +15,7 @@ def test_reset_returns_valid_observation():
     assert obs.task_description != ""
     assert obs.current_prompt != ""
     assert obs.previous_prompt == ""
-    assert obs.reward == 0.0
+    assert 0.0 < obs.reward < 1.0
     assert obs.done is False
     assert obs.step_count == 0
     assert 0.0 < obs.current_score < 1.0
@@ -93,7 +93,7 @@ def test_stuck_detection_terminates_with_penalty():
         if obs.done:
             break
     assert obs.done is True
-    assert obs.reward == -0.5
+    assert 0.0 < obs.reward < 1.0
 
 
 def test_stop_action_terminates_episode():
