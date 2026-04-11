@@ -46,14 +46,15 @@ TOKEN_PENALTY_ALPHA: float = float(os.getenv("TOKEN_PENALTY_ALPHA", "0.02"))
 GRADER_TYPE: str          = os.getenv("GRADER", "rouge")
 _TASK_SEED: str | None    = os.getenv("TASK_SEED", None)
 USE_INTELLIGENT_ACTIONS: bool = os.getenv("USE_INTELLIGENT_ACTIONS", "true").lower() == "true"
+MIN_VALID_SCORE: float = 0.05
 
 
 def _strict_score(value: float) -> float:
     """Force any score into strict (0,1) for platform task validation."""
     score = float(value)
     if not math.isfinite(score):
-        return SCORE_EPSILON
-    return max(SCORE_EPSILON, min(1.0 - SCORE_EPSILON, score))
+        return MIN_VALID_SCORE
+    return max(MIN_VALID_SCORE, min(1.0 - MIN_VALID_SCORE, score))
 
 
 def _strict_reward(value: float) -> float:
