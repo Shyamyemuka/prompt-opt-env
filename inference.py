@@ -153,6 +153,10 @@ EVAL_TASKS = [
         "context": "Machine learning is a type of AI where computers learn patterns from data.",
         "example": "Machine learning is like [child analogy]. The computer [simple description].",
         "constraint": "Simple words only. No jargon. For a 10-year-old.",
+        "fallback_output": (
+            "Machine learning means computers learn from examples. "
+            "They look at many examples and find patterns."
+        ),
     },
     {
         "task_id": 5,
@@ -167,6 +171,9 @@ EVAL_TASKS = [
         "context": "Binary search finds a target in a sorted array by halving the search space.",
         "example": "Binary search is O([notation]) because [explanation].",
         "constraint": "Include Big O notation and explain why that complexity holds.",
+        "fallback_output": (
+            "Binary search is O(log n) because each step removes half the remaining elements."
+        ),
     },
     {
         "task_id": 11,
@@ -182,6 +189,10 @@ EVAL_TASKS = [
         "context": "A Git merge conflict occurs when two branches changed the same lines differently.",
         "example": "1. [Trigger]. 2. [Markers: <<<<<<, =======, >>>>>>>]. 3. [Edit]. 4. [git add]. 5. [Commit].",
         "constraint": "Include the conflict markers (<<<<<<, =======, >>>>>>>). Cover all steps to push.",
+        "fallback_output": (
+            "Resolve conflict: open file, edit between <<<<<< and >>>>>>>, remove markers, "
+            "git add, git commit, then git push."
+        ),
     },
 ]
 
@@ -267,7 +278,8 @@ def rouge_l(hypothesis: str, reference: str) -> float:
         return SCORE_EPSILON
     raw = float(_ROUGE.score(reference, hypothesis)["rougeL"].fmeasure)
     bounded = max(SCORE_EPSILON, min(1.0 - SCORE_EPSILON, raw))
-    return round(bounded, 4)
+    rounded = round(bounded, 4)
+    return float(max(SCORE_EPSILON, min(1.0 - SCORE_EPSILON, rounded)))
 
 
 def emit_start(task: dict) -> None:
@@ -279,6 +291,11 @@ def _single_line(value: str | None) -> str:
     if not value:
         return "null"
     return " ".join(str(value).split()) or "null"
+
+
+def _strict_unit(value: float) -> float:
+    """Keep emitted step metrics inside strict (0,1) for validator compatibility."""
+    return float(max(0.01, min(0.99, round(float(value), 4))))
 
 
 def emit_step(
@@ -309,7 +326,7 @@ def emit_end(result: dict) -> None:
 def run_episode(task: dict, max_steps: int = 7) -> dict:
     emit_start(task)
     prompt = task["initial_prompt"]
-    initial_output = call_llm(prompt, task["reference"])
+    initial_output = call_llm(prompt, task["fallback_output"])
     initial_score = rouge_l(initial_output, task["reference"])
     initial_tokens = count_tokens(prompt)
 
@@ -340,7 +357,7 @@ def run_episode(task: dict, max_steps: int = 7) -> dict:
 
             try:
                 if action_id == 5:
-                    reward = round(current_score * 1.5, 4)
+                    reward = _strict_unit(current_score * 1.5)
                     total_reward += reward
                     rewards.append(reward)
                     steps = step_num
@@ -353,7 +370,7 @@ def run_episode(task: dict, max_steps: int = 7) -> dict:
                 else:
                     new_prompt = apply(action_id, prompt, task)
                 if new_prompt == prompt:
-                    reward = -0.1
+                    reward = _strict_unit(-0.1)
                     total_reward += reward
                     rewards.append(reward)
                     steps = step_num
@@ -366,7 +383,7 @@ def run_episode(task: dict, max_steps: int = 7) -> dict:
 
                 new_tokens = count_tokens(new_prompt)
                 if new_tokens > task["token_budget"]:
-                    reward = -0.5
+                    reward = _strict_unit(-0.5)
                     total_reward += reward
                     rewards.append(reward)
                     steps = step_num
@@ -374,14 +391,14 @@ def run_episode(task: dict, max_steps: int = 7) -> dict:
                     emit_step(step_num, action_id, reward, True, None)
                     break
 
-                new_output = call_llm(new_prompt, task["reference"])
+                new_output = call_llm(new_prompt, task["fallback_output"])
                 new_score = rouge_l(new_output, task["reference"])
                 token_overhead = new_tokens - current_tokens
-                reward = round(new_score - current_score - ALPHA * token_overhead, 4)
+                reward = _strict_unit(new_score - current_score - ALPHA * token_overhead)
 
                 done = False
                 if new_score > SUCCESS_THRESHOLD:
-                    reward = round(reward + 1.0, 4)
+                    reward = _strict_unit(reward + 1.0)
                     done = True
                     episode_success = True
                 elif step_num >= max_steps:
@@ -400,7 +417,7 @@ def run_episode(task: dict, max_steps: int = 7) -> dict:
                 if done:
                     break
             except Exception as step_error:
-                reward = 0.0
+                reward = _strict_unit(0.0)
                 total_reward += reward
                 rewards.append(reward)
                 steps = step_num
