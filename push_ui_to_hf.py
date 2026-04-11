@@ -67,6 +67,14 @@ DEPLOY_DIRS = {
     ENV_DIR / "templates": "templates",
 }
 
+DEPLOY_IGNORE = shutil.ignore_patterns(
+    "__pycache__",
+    "*.pyc",
+    "*.pyo",
+    "*.pyd",
+    "*.pyc.*",
+)
+
 
 def _load_env_local() -> None:
     try:
@@ -96,7 +104,7 @@ def stage_hf_bundle(staging_dir: Path) -> list[str]:
         if not source.exists():
             continue
         target = staging_dir / destination
-        shutil.copytree(source, target, dirs_exist_ok=True)
+        shutil.copytree(source, target, dirs_exist_ok=True, ignore=DEPLOY_IGNORE)
         staged.append(destination.replace("\\", "/") + "/")
 
     return sorted(staged)
