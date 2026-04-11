@@ -9,6 +9,7 @@ Modes:
 """
 import os
 import sys
+import math
 from rouge_score import rouge_scorer
 
 try:
@@ -149,9 +150,12 @@ class Grader:
             return SCORE_EPSILON
         scores = _ROUGE.score(reference, hypothesis)
         raw = float(scores["rougeL"].fmeasure)
+        if not math.isfinite(raw):
+            return SCORE_EPSILON
         # OpenEnv evaluator requires strict bounds: 0.0 < score < 1.0.
         bounded = max(SCORE_EPSILON, min(1.0 - SCORE_EPSILON, raw))
-        return round(bounded, 4)
+        rounded = round(bounded, 4)
+        return float(max(SCORE_EPSILON, min(1.0 - SCORE_EPSILON, rounded)))
 
     @staticmethod
     def clip_reward(reward: float) -> float:

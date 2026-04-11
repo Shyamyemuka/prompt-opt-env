@@ -6,6 +6,7 @@ STOP action (action_id=5) lets agent voluntarily end with quality bonus.
 """
 import os
 import random
+import math
 from importlib import import_module
 from uuid import uuid4
 
@@ -45,6 +46,14 @@ TOKEN_PENALTY_ALPHA: float = float(os.getenv("TOKEN_PENALTY_ALPHA", "0.02"))
 GRADER_TYPE: str          = os.getenv("GRADER", "rouge")
 _TASK_SEED: str | None    = os.getenv("TASK_SEED", None)
 USE_INTELLIGENT_ACTIONS: bool = os.getenv("USE_INTELLIGENT_ACTIONS", "true").lower() == "true"
+
+
+def _strict_score(value: float) -> float:
+    """Force any score into strict (0,1) for platform task validation."""
+    score = float(value)
+    if not math.isfinite(score):
+        return SCORE_EPSILON
+    return max(SCORE_EPSILON, min(1.0 - SCORE_EPSILON, score))
 
 
 class PromptOptEnvEnvironment(Environment):
@@ -117,7 +126,7 @@ class PromptOptEnvEnvironment(Environment):
         initial_score, _ = self._grader.score(
             self._current_prompt, self._task.reference_answer, task_id
         )
-        self._current_score = initial_score
+        self._current_score = _strict_score(initial_score)
         self._previous_score = SCORE_EPSILON
 
         return PromptObservation(
@@ -316,6 +325,7 @@ class PromptOptEnvEnvironment(Environment):
         new_score, llm_output = self._grader.score(
             new_prompt, self._task.reference_answer, task_id
         )
+        new_score = _strict_score(new_score)
         token_overhead = new_token_count - self._current_token_count
         quality_delta = new_score - self._current_score
         raw_reward = quality_delta - TOKEN_PENALTY_ALPHA * token_overhead
