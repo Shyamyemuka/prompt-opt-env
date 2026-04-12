@@ -185,7 +185,8 @@ class PromptOptEnvEnvironment(Environment):
 
         # ── STOP action ──────────────────────────────────────────────────────
         if action.action_id == 5:
-            stop_bonus = _strict_reward(Grader.clip_reward(self._current_score * 1.5))
+            stop_raw = Grader.clip_reward(self._current_score * 1.5)
+            stop_bonus = _strict_reward(stop_raw)
             self._step_count += 1
             return PromptObservation(
                 task_description=self._task.task_description,
@@ -207,6 +208,10 @@ class PromptOptEnvEnvironment(Environment):
                     "action_applied": "STOP",
                     "stuck_count": self._stuck_count,
                     "termination_reason": "voluntary_stop",
+                    "quality_delta": 0.0,
+                    "token_penalty": 0.0,
+                    "reward_raw": round(stop_raw, 4),
+                    "reward_clipped": round(stop_raw, 4),
                     "llm_output_preview": "",
                     "no_op": False,
                 },
@@ -241,6 +246,10 @@ class PromptOptEnvEnvironment(Environment):
                     "action_applied": action_name,
                     "stuck_count": self._stuck_count,
                     "termination_reason": "stuck",
+                    "quality_delta": 0.0,
+                    "token_penalty": 0.0,
+                    "reward_raw": -0.5,
+                    "reward_clipped": -0.5,
                     "llm_output_preview": "",
                     "no_op": False,
                 },
@@ -293,6 +302,10 @@ class PromptOptEnvEnvironment(Environment):
                     "llm_action_fallback": llm_action_fallback,
                     "stuck_count": self._stuck_count,
                     "termination_reason": "max_steps" if done else None,
+                    "quality_delta": 0.0,
+                    "token_penalty": 0.0,
+                    "reward_raw": -0.1,
+                    "reward_clipped": -0.1,
                     "llm_output_preview": "",
                     "no_op": True,
                 },
@@ -325,6 +338,10 @@ class PromptOptEnvEnvironment(Environment):
                     "llm_action_fallback": llm_action_fallback,
                     "stuck_count": self._stuck_count,
                     "termination_reason": "budget_exceeded",
+                    "quality_delta": 0.0,
+                    "token_penalty": 0.0,
+                    "reward_raw": -0.5,
+                    "reward_clipped": -0.5,
                     "llm_output_preview": "",
                     "no_op": False,
                     "tokens_over_budget": new_token_count - self._task.token_budget,
@@ -338,8 +355,9 @@ class PromptOptEnvEnvironment(Environment):
         new_score = _strict_score(new_score)
         token_overhead = new_token_count - self._current_token_count
         quality_delta = new_score - self._current_score
-        raw_reward = quality_delta - TOKEN_PENALTY_ALPHA * token_overhead
-        reward = Grader.clip_reward(raw_reward)
+        token_penalty = TOKEN_PENALTY_ALPHA * token_overhead
+        raw_reward = quality_delta - token_penalty
+        clipped_reward = Grader.clip_reward(raw_reward)
 
         # ── Update state ──────────────────────────────────────────────────────
         self._previous_prompt = self._current_prompt
@@ -356,14 +374,14 @@ class PromptOptEnvEnvironment(Environment):
         done = False
         termination_reason: str | None = None
         if new_score > DONE_THRESHOLD:
-            reward = Grader.clip_reward(reward + 1.0)
+            clipped_reward = Grader.clip_reward(clipped_reward + 1.0)
             done = True
             termination_reason = "success"
         elif self._step_count >= MAX_STEPS:
             done = True
             termination_reason = "max_steps"
 
-        reward = _strict_reward(reward)
+        reward = _strict_reward(clipped_reward)
 
         return PromptObservation(
             task_description=self._task.task_description,
@@ -388,6 +406,10 @@ class PromptOptEnvEnvironment(Environment):
                 "llm_action_fallback": llm_action_fallback,
                 "stuck_count": self._stuck_count,
                 "termination_reason": termination_reason,
+                "quality_delta": round(quality_delta, 4),
+                "token_penalty": round(token_penalty, 4),
+                "reward_raw": round(raw_reward, 4),
+                "reward_clipped": round(clipped_reward, 4),
                 "llm_output_preview": llm_output[:100] if llm_output else "",
                 "no_op": False,
             },

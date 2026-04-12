@@ -55,6 +55,18 @@ def test_step_returns_valid_observation():
     assert "action_applied" in obs.info
 
 
+def test_step_info_includes_reward_breakdown_fields():
+    env = PromptOptEnvEnvironment()
+    env.reset()
+    obs = env.step(PromptAction(action_id=3))
+
+    assert "quality_delta" in obs.info
+    assert "token_penalty" in obs.info
+    assert "reward_raw" in obs.info
+    assert "reward_clipped" in obs.info
+    assert 0 < obs.reward < 1
+
+
 def test_all_six_actions_work():
     for action_id in range(6):
         env = PromptOptEnvEnvironment()

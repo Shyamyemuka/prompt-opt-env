@@ -10,6 +10,7 @@ Modes:
 import os
 import sys
 import math
+import re
 from rouge_score import rouge_scorer
 
 try:
@@ -20,6 +21,13 @@ except (ModuleNotFoundError, ImportError):
 
 _ROUGE = rouge_scorer.RougeScorer(["rougeL"], use_stemmer=True)
 SCORE_EPSILON = 0.11
+_FILLER_TERMS = (
+    "please",
+    "could you",
+    "can you",
+    "i want you to",
+    "i need you to",
+)
 
 # Pre-written canned outputs per task_id for ROUGE mode.
 # Quality is intentionally moderate — represents what a model
@@ -116,19 +124,85 @@ class Grader:
         Returns:
             (rouge_l_f1, llm_output) — score is float in (0, 1).
         """
-        llm_output = self._get_output(prompt, task_id)
+        llm_output = self._get_output(prompt, reference_answer, task_id)
         rouge_l = self._compute_rouge(llm_output, reference_answer)
         return rouge_l, llm_output
 
-    def _get_output(self, prompt: str, task_id: int) -> str:
-        """Get LLM output. Uses OpenAI client if grader_type='openai_client', else dummy."""
+    def _get_output(self, prompt: str, reference_answer: str, task_id: int) -> str:
+        """Get LLM output. OpenAI mode uses API; rouge mode is deterministic and prompt-sensitive."""
         if self.grader_type == "openai_client":
             try:
                 return self._call_llm(prompt)
             except Exception as e:
                 print(f"[PromptOptEnv] [LLM] Fallback to dummy (error: {e})", file=sys.stderr)
-                return DUMMY_OUTPUTS.get(task_id, "")
-        return DUMMY_OUTPUTS.get(task_id, "")
+                return self._deterministic_rouge_output(prompt, reference_answer, task_id)
+        return self._deterministic_rouge_output(prompt, reference_answer, task_id)
+
+    @staticmethod
+    def _extract_keywords(text: str, limit: int = 8) -> list[str]:
+        """Extract stable keyword hints to make deterministic rouge mode prompt-sensitive."""
+        stopwords = {
+            "about", "after", "again", "also", "because", "before", "between",
+            "could", "exactly", "explain", "include", "into", "just", "must",
+            "only", "please", "prompt", "should", "that", "then", "this", "with",
+            "would", "your",
+        }
+        keywords: list[str] = []
+        for token in re.findall(r"[a-zA-Z]{4,}", text.lower()):
+            if token in stopwords:
+                continue
+            if token not in keywords:
+                keywords.append(token)
+            if len(keywords) >= limit:
+                break
+        return keywords
+
+    def _deterministic_rouge_output(self, prompt: str, reference_answer: str, task_id: int) -> str:
+        """
+        Deterministic non-API output used in rouge mode.
+        Output quality depends on prompt quality cues so edits can change scores.
+        """
+        reference = (reference_answer or "").strip()
+        if not reference:
+            return DUMMY_OUTPUTS.get(task_id, "")
+
+        prompt_text = (prompt or "").strip()
+        prompt_lower = prompt_text.lower()
+        prompt_tokens = prompt_text.split()
+        token_count = len(prompt_tokens)
+
+        feature_hits = 0
+        feature_hits += int("context:" in prompt_lower)
+        feature_hits += int("example output format:" in prompt_lower)
+        feature_hits += int("requirement:" in prompt_lower)
+        feature_hits += int(any(term in prompt_lower for term in ("step", "bullet", "exactly", "under", "include", "why")))
+
+        filler_hits = sum(prompt_lower.count(term) for term in _FILLER_TERMS)
+        length_penalty = max(0.0, (token_count - 70) / 40.0)
+
+        ref_words = reference.split()
+        ref_vocab = {w.strip(".,:;!?()[]{}\"").lower() for w in ref_words}
+        overlap = sum(1 for kw in self._extract_keywords(prompt_lower) if kw in ref_vocab)
+        overlap_bonus = min(4, overlap) * 0.04
+
+        coverage_ratio = 0.30 + (feature_hits * 0.10) + overlap_bonus - (filler_hits * 0.02) - (length_penalty * 0.05)
+        coverage_ratio = max(0.20, min(0.92, coverage_ratio))
+
+        keep_words = max(8, int(len(ref_words) * coverage_ratio))
+        candidate = " ".join(ref_words[:keep_words]).strip()
+
+        # Mirror common structural instructions so deterministic scoring reacts to constraints.
+        if "bullet" in prompt_lower and "\n" not in candidate:
+            pieces = [p.strip() for p in re.split(r"(?<=[.!?])\s+", candidate) if p.strip()]
+            if pieces:
+                candidate = "\n".join(f"- {p.rstrip('.')}" for p in pieces[:3])
+
+        if "exactly 2 sentence" in prompt_lower:
+            ref_sentences = [p.strip() for p in re.split(r"(?<=[.!?])\s+", reference) if p.strip()]
+            if len(ref_sentences) >= 2:
+                candidate = " ".join(ref_sentences[:2])
+
+        return candidate or DUMMY_OUTPUTS.get(task_id, "")
 
     def _call_llm(self, prompt: str) -> str:
         """

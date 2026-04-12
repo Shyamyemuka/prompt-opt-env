@@ -11,7 +11,6 @@ Mandatory expectations:
 """
 
 import os
-import random
 import re
 import sys
 import time
@@ -55,7 +54,6 @@ API_KEY = OPENAI_API_KEY or HF_TOKEN or os.getenv("API_KEY")
 BENCHMARK = os.getenv("BENCHMARK_NAME", "prompt_opt_env")
 ALPHA = float(os.getenv("TOKEN_PENALTY_ALPHA", "0.02"))
 MAX_STEPS = int(os.getenv("MAX_STEPS", "7"))
-INFERENCE_SEED = int(os.getenv("INFERENCE_SEED", "42"))
 LLM_TIMEOUT_SECONDS = float(os.getenv("LLM_TIMEOUT_SECONDS", "8"))
 LLM_FAILOVER_ATTEMPTS = max(1, int(os.getenv("LLM_FAILOVER_ATTEMPTS", "2")))
 LLM_FAILOVER_BACKOFF_SECONDS = max(0.0, float(os.getenv("LLM_FAILOVER_BACKOFF_SECONDS", "0.25")))
@@ -79,7 +77,6 @@ try:
 except Exception:
     _INTELLIGENT_ACTIONS_AVAILABLE = False
 
-random.seed(INFERENCE_SEED)
 _OPENAI_CLIENTS: list[dict[str, object]] = []
 _CLIENT_RETRIES = int(os.getenv("LLM_MAX_RETRIES", "2"))
 
@@ -304,6 +301,41 @@ def _strict_unit(value: float) -> float:
     return float(max(0.11, min(0.89, round(float(value), 4))))
 
 
+def _choose_action(
+    step_idx: int,
+    current_score: float,
+    current_token_count: int,
+    token_budget: int,
+    last_gain_per_token: float | None,
+    used_actions: set[int],
+) -> int:
+    """Deterministic cost-aware policy for baseline inference episodes."""
+    if step_idx >= MAX_STEPS - 1:
+        return 5
+
+    # Stop when quality is already high enough for the current token spend.
+    if step_idx >= 1 and current_score >= SUCCESS_THRESHOLD - 0.03:
+        return 5
+
+    # If the previous edit produced negligible value per token, stop early.
+    if step_idx >= 2 and last_gain_per_token is not None and last_gain_per_token < 0.015:
+        return 5
+
+    tokens_remaining = token_budget - current_token_count
+    if tokens_remaining <= 6:
+        return 1 if 1 not in used_actions else 5
+
+    # Prefer low-cost quality gains first, then richer actions when budget allows.
+    for candidate in (3, 4, 0, 2, 1):
+        if candidate in used_actions and candidate != 1:
+            continue
+        if candidate in (0, 2, 4) and tokens_remaining < 10:
+            continue
+        return candidate
+
+    return 5
+
+
 def emit_step(
     step_num: int,
     action_id: int,
@@ -325,7 +357,7 @@ def emit_end(result: dict) -> None:
     # Keep `score=` in END line for compatibility with the platform task validator.
     print(
         f"[END] success={str(result['success']).lower()} steps={result['steps']} "
-        f"score={result['final_score']:.4f} rewards={rewards_str}",
+        f"score={_strict_unit(result['final_score']):.4f} rewards={rewards_str}",
         flush=True,
     )
 
@@ -343,6 +375,8 @@ def run_episode(task: dict, max_steps: int = 7) -> dict:
     rewards: list[float] = []
     steps = 0
     episode_success = False
+    used_actions: set[int] = set()
+    last_gain_per_token: float | None = None
     result = {
         "task_id": task["task_id"],
         "difficulty": task["difficulty"],
@@ -359,9 +393,16 @@ def run_episode(task: dict, max_steps: int = 7) -> dict:
 
     try:
         for step_idx in range(max_steps):
-            # Keep a single bounded reward per task to satisfy strict task-score validators.
-            action_id = 5 if step_idx == 0 else random.randint(0, 5)
+            action_id = _choose_action(
+                step_idx=step_idx,
+                current_score=current_score,
+                current_token_count=current_tokens,
+                token_budget=task["token_budget"],
+                last_gain_per_token=last_gain_per_token,
+                used_actions=used_actions,
+            )
             step_num = step_idx + 1
+            used_actions.add(action_id)
 
             try:
                 if action_id == 5:
@@ -379,6 +420,7 @@ def run_episode(task: dict, max_steps: int = 7) -> dict:
                     new_prompt = apply(action_id, prompt, task)
                 if new_prompt == prompt:
                     reward = _strict_unit(-0.1)
+                    last_gain_per_token = 0.0
                     total_reward += reward
                     rewards.append(reward)
                     steps = step_num
@@ -392,6 +434,7 @@ def run_episode(task: dict, max_steps: int = 7) -> dict:
                 new_tokens = count_tokens(new_prompt)
                 if new_tokens > task["token_budget"]:
                     reward = _strict_unit(-0.5)
+                    last_gain_per_token = -1.0
                     total_reward += reward
                     rewards.append(reward)
                     steps = step_num
@@ -402,7 +445,9 @@ def run_episode(task: dict, max_steps: int = 7) -> dict:
                 new_output = call_llm(new_prompt, task["fallback_output"])
                 new_score = rouge_l(new_output, task["reference"])
                 token_overhead = new_tokens - current_tokens
-                reward = _strict_unit(new_score - current_score - ALPHA * token_overhead)
+                quality_delta = new_score - current_score
+                reward = _strict_unit(quality_delta - ALPHA * token_overhead)
+                last_gain_per_token = quality_delta / max(1, abs(token_overhead))
 
                 done = False
                 if new_score > SUCCESS_THRESHOLD:
@@ -426,6 +471,7 @@ def run_episode(task: dict, max_steps: int = 7) -> dict:
                     break
             except Exception as step_error:
                 reward = _strict_unit(0.0)
+                last_gain_per_token = -1.0
                 total_reward += reward
                 rewards.append(reward)
                 steps = step_num

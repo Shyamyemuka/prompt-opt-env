@@ -3,7 +3,7 @@
 import pytest
 from unittest.mock import patch, MagicMock
 
-from prompt_opt_env.server.grader import Grader, DUMMY_OUTPUTS, SCORE_EPSILON
+from prompt_opt_env.server.grader import Grader, SCORE_EPSILON
 
 
 def test_rouge_score_returns_float():
@@ -13,19 +13,20 @@ def test_rouge_score_returns_float():
     assert 0 < score < 1
 
 
-def test_rouge_score_is_nonzero_for_related_content():
+def test_rouge_mode_rewards_related_prompt_more():
     grader = Grader(grader_type="rouge")
     reference = "Recursion is when a function calls itself."
-    # task 14's dummy output is about recursion → should score higher than task 0's
-    score14, _ = grader.score("prompt", reference, task_id=14)
-    score0, _ = grader.score("prompt", reference, task_id=0)
-    assert score14 >= score0
+    related_score, _ = grader.score("Explain recursion with base case and recursive case.", reference, task_id=14)
+    unrelated_score, _ = grader.score("Tell me about climate change", reference, task_id=14)
+    assert related_score >= unrelated_score
 
 
-def test_rouge_output_is_dummy_when_no_api_token():
+def test_rouge_output_is_deterministic_and_non_empty():
     grader = Grader(grader_type="rouge")
-    _, output = grader.score("test prompt", "any reference", task_id=5)
-    assert output == DUMMY_OUTPUTS[5]
+    _, output1 = grader.score("test prompt", "any reference", task_id=5)
+    _, output2 = grader.score("test prompt", "any reference", task_id=5)
+    assert output1 != ""
+    assert output1 == output2
 
 
 def test_clip_reward_within_range():
@@ -48,7 +49,26 @@ def test_openai_api_fallback_on_failure():
         score, output = grader.score("test prompt", "reference answer", task_id=0)
     assert isinstance(score, float)
     assert 0 < score < 1
-    assert output == DUMMY_OUTPUTS[0]  # fell back to dummy
+    expected = grader._deterministic_rouge_output("test prompt", "reference answer", task_id=0)
+    assert output == expected
+
+
+def test_rouge_mode_is_prompt_sensitive_for_same_task():
+    grader = Grader(grader_type="rouge")
+    reference = (
+        "Binary search has O(log n) complexity because each comparison removes "
+        "half of the remaining search space."
+    )
+
+    weak_prompt = "binary search"
+    strong_prompt = (
+        "Explain binary search complexity. Context: Binary search halves the search "
+        "space each step. Requirement: Include Big O notation and explain why."
+    )
+
+    weak_score, _ = grader.score(weak_prompt, reference, task_id=5)
+    strong_score, _ = grader.score(strong_prompt, reference, task_id=5)
+    assert strong_score >= weak_score
 
 
 def test_compute_rouge_empty_inputs():
