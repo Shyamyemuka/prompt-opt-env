@@ -51,3 +51,8 @@ prompt_opt_env/uv_error.txt
 checklist.md
 Guidelines.md
 inference_out.txt
+
+# HF local artifact bundles (do not commit)
+.hf_bundle_test/
+.hf_bundle_test2/
+.hf_live_repo/
