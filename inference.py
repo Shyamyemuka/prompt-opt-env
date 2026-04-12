@@ -322,9 +322,10 @@ def emit_step(
 
 def emit_end(result: dict) -> None:
     rewards_str = ",".join(f"{r:.2f}" for r in result["rewards"])
-    # Format strictly per guidelines: success, steps, rewards only
+    # Keep `score=` in END line for compatibility with the platform task validator.
     print(
-        f"[END] success={str(result['success']).lower()} steps={result['steps']} rewards={rewards_str}",
+        f"[END] success={str(result['success']).lower()} steps={result['steps']} "
+        f"score={result['final_score']:.4f} rewards={rewards_str}",
         flush=True,
     )
 
