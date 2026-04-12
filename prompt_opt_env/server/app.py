@@ -3,7 +3,7 @@
 import json
 import math
 
-from fastapi import Request
+from fastapi import Request, Response
 from fastapi.responses import JSONResponse
 
 try:
@@ -80,15 +80,23 @@ async def normalize_reset_and_step_payloads(request: Request, call_next):
     try:
         payload = json.loads(body.decode("utf-8"))
     except Exception:
-        return response
+        # Body iterator is already consumed; rebuild response body safely.
+        return Response(
+            content=body,
+            status_code=response.status_code,
+            media_type=media_type,
+        )
 
     if not isinstance(payload, dict):
-        return response
+        return Response(
+            content=body,
+            status_code=response.status_code,
+            media_type=media_type,
+        )
 
     return JSONResponse(
         content=_normalize_env_payload(payload),
         status_code=response.status_code,
-        headers=dict(response.headers),
         media_type="application/json",
     )
 
