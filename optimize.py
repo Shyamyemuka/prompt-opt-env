@@ -49,6 +49,11 @@ _ROUGE = rouge_scorer.RougeScorer(["rougeL"], use_stemmer=True)
 SCORE_EPSILON = 0.11
 
 
+def strict_unit_interval(value: float) -> float:
+    """Keep optimizer-facing rewards and heuristic scores within strict open bounds."""
+    return float(max(SCORE_EPSILON, min(1.0 - SCORE_EPSILON, round(float(value), 4))))
+
+
 def call_llm(prompt: str, max_tokens: int = 300) -> str:
     """Call LLM with the prompt and return output."""
     text = _LLM_ROUTER.complete(
@@ -70,7 +75,7 @@ def score_output(output: str, reference: str) -> float:
         return SCORE_EPSILON
     base_score = float(_ROUGE.score(reference, output)["rougeL"].fmeasure)
     bounded = max(SCORE_EPSILON, min(1.0 - SCORE_EPSILON, base_score))
-    return round(bounded, 4)
+    return strict_unit_interval(bounded)
 
 
 def intelligent_action_selection(
@@ -243,7 +248,7 @@ class IntelligentPromptOptimizer:
 
             # Handle STOP
             if action_id == 5:
-                stop_bonus = round(best_score * 1.5, 4)
+                stop_bonus = strict_unit_interval(best_score * 1.5)
                 total_reward += stop_bonus
                 step_rewards.append(("STOP", stop_bonus))
                 print(f"\n    Step {step+1}: [STOP] Agent decided to stop")
@@ -271,8 +276,9 @@ class IntelligentPromptOptimizer:
 
             # Check for no-op
             if new_prompt == current_prompt:
-                step_rewards.append((action_name, -0.1))
-                total_reward -= 0.1
+                no_op_reward = strict_unit_interval(-0.1)
+                step_rewards.append((action_name, no_op_reward))
+                total_reward += no_op_reward
                 print(f"    Step {step+1}: [{action_name}] No effect (no-op penalty: -0.1)")
                 continue
 
@@ -280,7 +286,7 @@ class IntelligentPromptOptimizer:
 
             # Check budget
             if new_tokens > self.token_budget:
-                penalty = -0.5
+                penalty = strict_unit_interval(-0.5)
                 total_reward += penalty
                 step_rewards.append((action_name, penalty))
                 print(f"    Step {step+1}: [{action_name}] Budget exceeded! Penalty: -0.5")
@@ -294,7 +300,7 @@ class IntelligentPromptOptimizer:
             quality_delta = new_score - current_score
             token_overhead = new_tokens - current_tokens
             step_reward = quality_delta - ALPHA * token_overhead
-            step_reward = round(max(-2.0, min(2.0, step_reward)), 4)
+            step_reward = strict_unit_interval(step_reward)
 
             total_reward += step_reward
             step_rewards.append((action_name, step_reward))
@@ -395,7 +401,7 @@ class IntelligentPromptOptimizer:
     def _heuristic_score(self, output: str) -> float:
         """Fallback scoring when no reference."""
         if not output:
-            return 0.0
+            return SCORE_EPSILON
         score = 0.3
         if len(output) > 50:
             score += 0.1
@@ -407,7 +413,7 @@ class IntelligentPromptOptimizer:
             score += 0.1
         if len(output) > 200:
             score += 0.1
-        return round(min(score, 0.8), 2)  # Cap at 0.8 without reference
+        return strict_unit_interval(min(score, 0.8))  # Cap at 0.8 without reference
 
 
 def detect_task_type(prompt: str, input_text: str) -> str:
