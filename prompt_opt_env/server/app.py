@@ -1,5 +1,11 @@
 ﻿"""FastAPI app for PromptOptEnv."""
 
+import json
+import math
+
+from fastapi import Request
+from fastapi.responses import JSONResponse
+
 try:
     from openenv.core.env_server.http_server import create_fastapi_app
 except Exception as e:  # pragma: no cover
@@ -18,6 +24,73 @@ app = create_fastapi_app(
     PromptObservation,
     max_concurrent_envs=1,
 )
+
+STRICT_SCORE_FLOOR = 0.11
+
+
+def _strict_unit_interval(value: object, fallback: float = STRICT_SCORE_FLOOR) -> float:
+    """Keep scores and rewards strictly inside the validator's accepted range."""
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return fallback
+    if not math.isfinite(numeric):
+        return fallback
+    rounded = round(numeric, 4)
+    return float(max(STRICT_SCORE_FLOOR, min(1.0 - STRICT_SCORE_FLOOR, rounded)))
+
+
+def _normalize_env_payload(payload: dict) -> dict:
+    """Mirror top-level reward/done into observation for validator compatibility."""
+    normalized = dict(payload)
+    observation = dict(normalized.get("observation") or {})
+
+    reward = _strict_unit_interval(
+        normalized.get("reward", observation.get("reward", STRICT_SCORE_FLOOR))
+    )
+    done = bool(normalized.get("done", observation.get("done", False)))
+
+    for key in ("current_score", "previous_score"):
+        if key in observation:
+            observation[key] = _strict_unit_interval(observation[key])
+
+    observation["reward"] = reward
+    observation["done"] = done
+    normalized["reward"] = reward
+    normalized["done"] = done
+    normalized["observation"] = observation
+    return normalized
+
+
+@app.middleware("http")
+async def normalize_reset_and_step_payloads(request: Request, call_next):
+    """Keep `/reset` and `/step` responses aligned with the declared observation schema."""
+    response = await call_next(request)
+    if request.url.path not in {"/reset", "/step"} or response.status_code >= 400:
+        return response
+
+    media_type = getattr(response, "media_type", "") or response.headers.get("content-type", "")
+    if "json" not in media_type.lower():
+        return response
+
+    body = b""
+    async for chunk in response.body_iterator:
+        body += chunk
+
+    try:
+        payload = json.loads(body.decode("utf-8"))
+    except Exception:
+        return response
+
+    if not isinstance(payload, dict):
+        return response
+
+    return JSONResponse(
+        content=_normalize_env_payload(payload),
+        status_code=response.status_code,
+        headers=dict(response.headers),
+        media_type="application/json",
+    )
 
 # Ensure checklist-compatible health response payload.
 try:

@@ -90,3 +90,36 @@ def test_client_parse_result_full_observation():
     assert obs.info["action_applied"] == "REPHRASE"
     assert result.reward == 0.16
     assert result.done is False
+
+
+def test_client_parse_result_clamps_edge_values():
+    from prompt_opt_env.client import PromptOptEnvEnv
+
+    client = PromptOptEnvEnv.__new__(PromptOptEnvEnv)
+    payload = {
+        "observation": {
+            "task_description": "Edge case",
+            "current_prompt": "x",
+            "previous_prompt": "y",
+            "current_score": 1.0,
+            "previous_score": 0.0,
+            "current_token_count": 1,
+            "previous_token_count": 1,
+            "token_budget": 80,
+            "tokens_remaining": 79,
+            "token_overhead": 0,
+            "reward": 1.0,
+            "done": True,
+            "step_count": 1,
+            "reference_answer": "z",
+            "info": {},
+        },
+        "reward": 0.0,
+        "done": True,
+    }
+
+    result = client._parse_result(payload)
+    assert 0 < result.observation.current_score < 1
+    assert 0 < result.observation.previous_score < 1
+    assert 0 < result.observation.reward < 1
+    assert 0 < result.reward < 1

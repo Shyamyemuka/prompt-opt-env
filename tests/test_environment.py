@@ -1,7 +1,9 @@
 """Integration tests for the PromptOptEnvEnvironment."""
 
 import pytest
+from fastapi.testclient import TestClient
 
+from prompt_opt_env.server.app import app
 from prompt_opt_env.server.prompt_opt_env_environment import PromptOptEnvEnvironment
 from prompt_opt_env.models import PromptAction
 
@@ -123,3 +125,21 @@ def test_state_step_count_updates():
     env.step(PromptAction(action_id=2))
     state = env.state
     assert state.step_count == 2
+
+
+def test_http_reset_and_step_include_nested_reward_and_done():
+    client = TestClient(app)
+
+    reset_payload = client.post("/reset").json()
+    reset_obs = reset_payload["observation"]
+    assert 0 < reset_payload["reward"] < 1
+    assert 0 < reset_obs["reward"] < 1
+    assert reset_payload["done"] is False
+    assert reset_obs["done"] is False
+
+    step_payload = client.post("/step", json={"action": {"action_id": 5}}).json()
+    step_obs = step_payload["observation"]
+    assert 0 < step_payload["reward"] < 1
+    assert 0 < step_obs["reward"] < 1
+    assert step_payload["done"] is True
+    assert step_obs["done"] is True

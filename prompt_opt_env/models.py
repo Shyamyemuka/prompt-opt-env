@@ -44,7 +44,7 @@ class PromptObservation(Observation):
     token_budget: int = Field(..., ge=1, description="Hard ceiling on prompt token count for this task")
     tokens_remaining: int = Field(..., description="token_budget - current_token_count")
     token_overhead: int = Field(..., description="Tokens added this step (negative if SHORTEN applied)")
-    reward: float = Field(..., description="Combined reward: quality_delta - alpha*token_overhead, clipped [-2, +2]")
+    reward: float = Field(..., gt=0, lt=1, description="Strictly bounded reward signal in the open interval (0, 1)")
     done: bool = Field(..., description="True if episode ended")
     step_count: int = Field(..., ge=0, description="Steps taken this episode")
     reference_answer: str = Field(..., description="Gold-standard answer for grader")

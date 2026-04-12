@@ -1,5 +1,6 @@
 """Prompt Opt Env / PromptOptEnv — WebSocket Client."""
 
+import math
 from typing import Dict
 
 from openenv.core import EnvClient
@@ -7,6 +8,17 @@ from openenv.core.client_types import StepResult
 from openenv.core.env_server.types import State
 
 from .models import PromptAction, PromptObservation, STRICT_SCORE_FLOOR
+
+
+def _strict_unit_interval(value: object, fallback: float = STRICT_SCORE_FLOOR) -> float:
+    """Clamp parsed reward/score values into the validator-safe open interval."""
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return fallback
+    if not math.isfinite(numeric):
+        return fallback
+    return float(max(STRICT_SCORE_FLOOR, min(1.0 - STRICT_SCORE_FLOOR, round(numeric, 4))))
 
 
 class PromptOptEnvEnv(
@@ -55,13 +67,13 @@ class PromptOptEnvEnv(
         """
         obs_data = payload.get("observation", {})
         safe_score = STRICT_SCORE_FLOOR
-        safe_reward = float(obs_data.get("reward", payload.get("reward", safe_score)))
+        safe_reward = _strict_unit_interval(obs_data.get("reward", payload.get("reward", safe_score)))
         observation = PromptObservation(
             task_description=obs_data.get("task_description", ""),
             current_prompt=obs_data.get("current_prompt", ""),
             previous_prompt=obs_data.get("previous_prompt", ""),
-            current_score=float(obs_data.get("current_score", safe_score)),
-            previous_score=float(obs_data.get("previous_score", safe_score)),
+            current_score=_strict_unit_interval(obs_data.get("current_score", safe_score)),
+            previous_score=_strict_unit_interval(obs_data.get("previous_score", safe_score)),
             current_token_count=obs_data.get("current_token_count", 0),
             previous_token_count=obs_data.get("previous_token_count", 0),
             token_budget=obs_data.get("token_budget", 80),
@@ -76,7 +88,7 @@ class PromptOptEnvEnv(
 
         return StepResult(
             observation=observation,
-            reward=float(payload.get("reward", safe_reward)),
+            reward=_strict_unit_interval(payload.get("reward", safe_reward)),
             done=payload.get("done", False),
         )
 
